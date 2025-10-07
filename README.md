@@ -1,7 +1,7 @@
 
 # Cerebrum 
 
-Cerebrum is a **local, AI-powered learning assistant** designed to help users learn efficiently and retain knowledge effectively. It leverages Rose 🌹, a custom LLM, to guide learning, track progress, and optimize study strategies.
+Cerebrum is a **local, AI-powered learning assistant** designed to help users learn efficiently and retain knowledge effectively. It leverages Rose 🌹, a custom LLM(planned), to guide learning, track progress, and optimize study strategies.
 
 ## Features
 

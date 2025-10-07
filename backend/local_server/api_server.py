@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from langchain_ollama import OllamaLLM
-from cerebrum_core.embed_inator import load_embeddings_and_db
 from cerebrum_core.ingest_inator import *
 from local_server import data_router
 import logging
@@ -15,7 +14,7 @@ app = FastAPI()
 
 app.include_router(data_router.router)
 
-def create_api_server(model_name, vectorstores_db):
+def create_api_server(llm_model, vectorstores_dir):
     
     # chunk generation using the files in the storage
     # embedding the chunks into queriable chroma dbs for
@@ -37,8 +36,8 @@ def create_api_server(model_name, vectorstores_db):
         allow_headers=["*"]
     )
 
-    _, db = load_embeddings_and_db(model_name, vectorstores_db)
-    llm = OllamaLLM(model=model_name)
+    _, db = load_embeddings_and_db(llm_model, vectorstores_dir)
+    llm = OllamaLLM(model=llm_model)
 
     class Query(BaseModel):
         question: str
