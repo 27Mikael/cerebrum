@@ -1,4 +1,6 @@
 import json
+from fastapi import File
+import yaml
 import asyncio
 import pymupdf4llm
 
@@ -22,29 +24,29 @@ class IngestInator:
         3. embed information
     """
 
-    def __init__(self, md_filepath: Path, embedding_model = None, vectorstores_dir = None) -> None:
-        self.vectorstores_dir = vectorstores_dir
-        self.md_filepath = md_filepath
+    def __init__(self, filepath: Path, embedding_model = None, vectorstores_root = None) -> None:
+        self.vectorstores_root = vectorstores_root
+        self.filepath = filepath
         self.embedding_model = embedding_model
         self.chunks: list[Document] = []
 
-    def sanitize_inator(self, name: str , llm_model: str):
+    def _yaml_inator(self, metadata: FileMetadata) -> str:
+        yaml_dump = yaml.dump(metadata.model_dump(), sort_keys=False)
+        return f"---\n{yaml_dump}---\n\n"
+
+    def sanitize_inator(self, filename: str, metadata: dict | None, llm_model: str):
         """
             renames files to chromadb ready strings
             while also preserving or updating metadata
             offloading renaming and sanitization to llm
         """
-        # to do this i must provide file metadata
-        # i must provide string name
-        # and allow for a template the llm must follow
         model = OllamaLLM(model=llm_model)
         santize_prompt = RosePrompts.get_prompt("rose_rename")
         if not santize_prompt:
-            raise ValueError("Prompt 'rose_reanme' not fount in RosePrompts")
-        filled_prompt = santize_prompt.format(filename=name)
+            raise ValueError("Prompt 'rose_rename' not fount in RosePrompts")
+        filled_prompt = santize_prompt.format(filename=filename, metadata=metadata)
         sanitized_prompt = model.invoke(filled_prompt)
 
-        # return sanitized_prompt
         try: 
             parsed_prompt = json.loads(sanitized_prompt)
         except json.JSONDecodeError:
@@ -53,23 +55,26 @@ class IngestInator:
         return FileMetadata(**parsed_prompt)
 
 
-    def markdown_inator(
-        self,
-        domain:str,
-        subject:str,
-        filename:str,
-    ):
+    def markdown_inator(self, metadata: FileMetadata):
         """
             convert files to markdown
         """
+        domain = metadata.domain
+        subject = metadata.subject
+        filename = metadata.title
+
+        # add yaml front matter to the documents
   
         markdown_dir = Path("../data/storage/markdown") / domain / subject
         markdown_dir.mkdir(parents=True, exist_ok=True)
 
-        md_text = pymupdf4llm.to_markdown(self.md_filepath)
+        md_body = pymupdf4llm.to_markdown(self.filepath, show_progress=True)
+
+        yaml_front = self._yaml_inator(metadata)
+        full_md = f"{yaml_front}{md_body}"
 
         md_output = markdown_dir / f"{filename}.md"
-        md_output.write_bytes(md_text.encode())
+        md_output.write_text(full_md, encoding="utf-8")
 
 
     def chunk_inator(self, markdown_filepath: Path) -> list[Document]:
@@ -87,8 +92,10 @@ class IngestInator:
             ("##", "Header 2"),
             ("###", "Header 3"),
             ("####", "Header 4"),
-            ("#####", "Header 5")
+            ("#####", "Header 5"),
+            ("######", "Header 6")
         ]
+
         splitter = MarkdownHeaderTextSplitter(
             headers_to_split_on=header_levels,
             strip_headers=False
@@ -102,7 +109,7 @@ class IngestInator:
         store chunks in vectorstores
         """
         assert self.embedding_model is not None, "embedding_model is required"
-        assert self.vectorstores_dir is not None, "vectorstores_dir is required"
+        assert self.vectorstores_root is not None, "vectorstores_root is required"
 
         # embedding
         # WARN: look into making this framework agnostic
@@ -110,10 +117,13 @@ class IngestInator:
         embedding_llm = OllamaEmbeddings(model=self.embedding_model)
         chromadb = Chroma(
             collection_name=collection_name,
-            persist_directory=str(self.vectorstores_dir),
+            persist_directory=str(self.vectorstores_root),
             embedding_function=embedding_llm
         )
 
+        # add legible chunk ids for each documents
+        # probably in a style that matches filemeta data
+        # 
         chromadb.add_documents(self.chunks)
         asyncio.run(chromadb.persist())
 

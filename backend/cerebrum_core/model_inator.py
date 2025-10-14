@@ -1,5 +1,7 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Union
+
+from pydantic_core.core_schema import none_schema
 
 class Subtopic(BaseModel):
     name: str
@@ -46,11 +48,16 @@ class KnowledgeBase(BaseModel):
         self.domains.append(domain)
         return domain
 
+class Subquery(BaseModel):
+    text: str
+    domain: str
+    subject: str
+
 class TranslatedQuery(BaseModel):
     rewritten: str
-    subqueries: List
     domain: str | List[str]
     subject: str | List[str]
+    subqueries: List[Subquery]
 
 class FileMetadata(BaseModel):
     title: str
@@ -59,3 +66,5 @@ class FileMetadata(BaseModel):
     authors: str | List[str]
     keywords: str | List[str]
 
+class Chunk(BaseModel):
+     pass

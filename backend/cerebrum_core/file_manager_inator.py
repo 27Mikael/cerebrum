@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 def file_walker_inator(root: Path, max_depth: int = 4):
@@ -22,4 +23,34 @@ def file_walker_inator(root: Path, max_depth: int = 4):
                 yield from recurse_inator(file, parts + [file.name])
 
     yield from recurse_inator(root, [])
+
+
+UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+def knowledgebase_index_inator(root: Path):
+    domains, subjects, topics, subtopics = set(), set(), set(), set()
+    available_files = []
+
+    for info in file_walker_inator(root):
+        # skip if any part is a UUID
+        skip = False
+        for part in [info["domain"], info["subject"], info["topic"], info["subtopic"]]:
+            if part and UUID_PATTERN.fullmatch(part):
+                skip = True
+                break
+        if skip:
+            continue
+
+        available_files.append(info)
+        if info["domain"]: domains.add(info["domain"])
+        if info["subject"]: subjects.add(info["subject"])
+        if info["topic"]: topics.add(info["topic"])
+        if info["subtopic"]: subtopics.add(info["subtopic"])
+
+    return {
+        "domains": sorted(domains),
+        "subjects": sorted(subjects),
+        "topics": sorted(topics),
+        "subtopics": sorted(subtopics),
+    }
 
