@@ -21,8 +21,9 @@ class RetrieverInator:
         self.embedding_model = OllamaEmbeddings(model=embedding_model)
         self.llm_model = OllamaLLM(model=llm_model) 
         self.constructed_query = {}
+        self.all_results = []
 
-    def translator_inator(self, user_query: str, vectorstores_root: str):
+    def translator_inator(self, user_query: str):
         """
              translates user input into vectorstore queries
         """
@@ -35,7 +36,7 @@ class RetrieverInator:
         if not translation_prompt:
             raise ValueError("Prompt 'rose_query_translator' not found in RosePrompts")
 
-        available_stores = knowledgebase_index_inator(Path(vectorstores_root))
+        available_stores = knowledgebase_index_inator(Path(self.vectorstores_root))
 
         filled_prompt = translation_prompt.format(
             user_query=user_query,
@@ -67,21 +68,40 @@ class RetrieverInator:
 
         return self.constructed_query
 
-    def retrieve_inator(self,k: int=3):
+    def retrieve_inator(self, k: int=3):
         """
             queries vectorstores using constructed_query
             and generates final response
         """
-        all_results = []
 
         # TODO: similarity_search vs as_retriever 
         for route in self.constructed_query["routes"]:
             store = Chroma (
+                collection_name=route["subquery"].subject,
                 persist_directory=route["path"],
                 embedding_function=self.embedding_model
             )
-            retrieve = store.as_retriever(search_kwargs={"k": k})
+            retrieve = store.as_retriever(
+                search_type="mmr", 
+                search_kwargs={"k": k, "fetch_k": 15}
+            )
             result = retrieve.invoke(route["subquery"].text)
-            all_results.append(result)
+            self.all_results.append(result)
 
-        return all_results
+        return self.all_results
+
+    def generate_inator(self, user_query:str):
+        flat_docs = [doc for docs in self.all_results for doc in docs]
+        context_text = "\n\n".join(doc.page_content for doc in flat_docs)
+
+        base_prompt = RosePrompts.get_prompt("rose_answer")
+        if not base_prompt:
+            raise ValueError("Prompt 'rose_answer' not found in RosePrompts")
+
+        final_prompt = base_prompt.format(
+            question=user_query,
+            context=context_text
+        )
+
+        response = self.llm_model.invoke(final_prompt)
+        return response

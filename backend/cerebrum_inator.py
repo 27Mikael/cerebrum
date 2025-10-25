@@ -1,9 +1,21 @@
 import uvicorn
-from pathlib import Path
 from fastapi import FastAPI
+from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 
-from local_server import on_startup, chat, quiz, review
+from cerebrum_core.file_manager_inator import FileRegisterInator
+from local_server import routes_process_files
+# %%
+#
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    registry = FileRegisterInator()
+    app.state.registry = registry
+
+    app.include_router(routes_process_files.router)
+    yield
+
 
 def create_api_server():
     """
@@ -11,7 +23,7 @@ def create_api_server():
     """
 
     # %%
-    app = FastAPI()
+    app = FastAPI(lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware, 
@@ -22,21 +34,7 @@ def create_api_server():
     )
 
     # include routers
-    app.include_router(chat.router)
-
-    # %%
-    @app.on_event("startup")
-    async def startup():
-
-        markdown_files_dir = Path("../data/storage/markdown")
-        knowledgebase_dir = Path("../data/knowledgebase")
-        embedding_model = "qwen3-embedding:4b-q4_K_M:"
-        llm_model = "mistral:7b"
-
-        # If these are async, fine. If not, remove await.
-        on_startup.markdown_converter_inator(knowledgebase_dir, llm_model)
-        on_startup.markdown_embedder_inator(markdown_files_dir, embedding_model)
-
+#    app.include_router(chat.router)
     return app
 
 app = create_api_server()

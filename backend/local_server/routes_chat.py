@@ -1,6 +1,3 @@
-import logging
-
-from langchain_ollama import OllamaLLM
 from fastapi import APIRouter
 from pydantic import BaseModel
 from cerebrum_core.retriever_inator import *
@@ -30,14 +27,12 @@ async def ask_rose(query: Query):
     )
 
     translated_query = process_query.translator_inator(
-        user_query=query.text,
-        vectorstores_root=vectorstores_root
+        user_query=query.text
     )
     # TODO: dynamically generate the vectorstores
-    process_query.constructor_inator(
-        translated_query=translated_query
-    )
+    process_query.constructor_inator(translated_query=translated_query)
 
-    response = process_query.retrieve_inator()
+    process_query.retrieve_inator()
+    response = process_query.generate_inator(user_query=query.text)
     return response
 

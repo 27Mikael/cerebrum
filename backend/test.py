@@ -1,46 +1,76 @@
 import pathlib
 import pymupdf
+from pymupdf.mupdf import pdf_metadata
 import tiktoken
 import pymupdf4llm
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
-from cerebrum_core.file_manager_inator import knowledgebase_index_inator
+from cerebrum_core.file_manager_inator import knowledgebase_index_inator, FileRegisterInator
 from cerebrum_core.ingest_inator import IngestInator
 from cerebrum_core.retriever_inator import RetrieverInator
+doc = pathlib.Path("../data/storage/markdown/chemistry/biochemistry/lehninger-principles-of-biochemistry.md")
+pdf_path = pathlib.Path("../data/knowledgebase/biology/physiology/Johnny Hall - Guyton Hall TextBook of medical Physiology 14th edition John E Hall (2021) - libgen.li.pdf")
+
+
+# %% 
+with pymupdf.open(pdf_path) as file:
+    metadata = file.metadata
+to_md = IngestInator(
+    filepath=pdf_path
+)
+clean_md = to_md.sanitize_inator(
+    filename=pdf_path.name,
+    metadata=file.metadata,
+    llm_model="mistral:7b"
+)
+print(file.metadata)
+print(clean_md)
+chunks = to_md.chunk_inator(markdown_filepath=doc)
+print(chunks[43].page_content)
+print(chunks[43].metadata)
+print(len(chunks))
+
+
+#%%
 
 # %%
-doc = pathlib.Path("../data/storage/markdown/biology/biochemistry/Lehninger Principles of Biochemistry 8th edition by by David L n - Lehninger Principles of Biochemistry eighth edition by by David L Nelson (2021) - libgen.li.pdf.md")
-
-pdf_path = pathlib.Path("../data/knowledgebase/biology/biochemistry/Lehninger Principles of Biochemistry 8th edition by by David L n - Lehninger Principles of Biochemistry eighth edition by by David L Nelson (2021) - libgen.li.pdf")
-
-query = "Explain how proteins form supramolecular complexes and the role of noncovalent interactions."
+query = "Describe DNA"
 retrieve = RetrieverInator(
     vectorstores_root = "../data/storage/vectorstores",
     embedding_model="qwen3-embedding:4b-q4_K_M",
     llm_model = "mistral:7b"
 )
 
-translated_query = retrieve.translator_inator(
-    user_query=query,
-    vectorstores_root="../data/storage/vectorstores"
-)
-print(translated_query)
+translated_query = retrieve.translator_inator(user_query=query)
+for sq in translated_query.subqueries:
+    print(sq.subject)
 
 constructor = retrieve.constructor_inator(
     translated_query=translated_query,
 )
-print(constructor["routes"])
-
+print(constructor)
 for route in constructor["routes"]:
-    print(route["subquery"].text)
-    print(route["path"])
+    print(route["subquery"].subject)
 
-response = retrieve.retrieve_inator()
+retrieve.retrieve_inator(collection_name="david-s-latchman-gene-control")
+response = retrieve.generate_inator(user_query=query)
 print(response)
-
-test = knowledgebase_index_inator(pathlib.Path("../data/storage/vectorstores"))
-print(test)
 
 #%%
 
+#%%
+from langchain_chroma import Chroma
+from langchain_ollama import OllamaEmbeddings
 
+query = "Describe DNA."
+test_db = Chroma (
+    embedding_function=OllamaEmbeddings(model="qwen3-embedding:4b-q4_K_M"),
+    collection_name="david-s-latchman-gene-control",
+    persist_directory="../data/storage/vectorstores/biology/genetics"
+)
+retrieve = test_db.as_retriever(search_kwargs={"k": 3})
+result = retrieve.invoke(query)
+
+for doc in result:
+    print(doc.page_content)
+# %%

@@ -1,7 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List, Union
-
-from pydantic_core.core_schema import none_schema
+from typing import Optional, List 
 
 class Subtopic(BaseModel):
     name: str

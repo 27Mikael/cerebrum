@@ -1,4 +1,6 @@
 import re
+import hashlib
+import sqlite3
 from pathlib import Path
 
 def file_walker_inator(root: Path, max_depth: int = 4):
@@ -17,7 +19,7 @@ def file_walker_inator(root: Path, max_depth: int = 4):
                     "filepath": file,
                     "filename": file.name,
                     "filestem": file.stem,
-                    "file-ext": file.suffix
+                    "file-ext": file.suffix,
                 }
             elif file.is_dir() and len(parts) < max_depth:
                 yield from recurse_inator(file, parts + [file.name])
@@ -41,7 +43,7 @@ def knowledgebase_index_inator(root: Path):
         if skip:
             continue
 
-        available_files.append(info)
+        available_files.append(info["filestem"])
         if info["domain"]: domains.add(info["domain"])
         if info["subject"]: subjects.add(info["subject"])
         if info["topic"]: topics.add(info["topic"])
@@ -52,5 +54,130 @@ def knowledgebase_index_inator(root: Path):
         "subjects": sorted(subjects),
         "topics": sorted(topics),
         "subtopics": sorted(subtopics),
-    }
+    }, available_files
 
+
+
+
+class FileRegisterInator():
+    def __init__(self, db_path: str = "../local_server/db/registry.db"):
+        self.DB_PATH = Path(db_path).resolve()
+        self.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self._table_iniatior_inator()
+
+    def _table_iniatior_inator(self):
+        conn = sqlite3.connect(self.DB_PATH)
+        cursor = conn.cursor()
+
+        # table if none exists
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS registry (
+            id INTEGER PRIMARY KEY,
+            original_name TEXT UNIQUE,
+            sanitized_name TEXT,
+            hash_id TEXT UNIQUE,
+            converted INTEGER DEFAULT 0,
+            embedded INTEGER DEFAULT 0,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_registry_original_name ON registry(original_name)")
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_registry_hash ON registry(hash_id)")
+
+        conn.commit()
+        conn.close()
+
+
+    def hash_inator(self, filename: str):
+        """Generate a determinstic hash_id from filename"""
+        return hashlib.sha256(filename.encode("utf-8")).hexdigest()
+
+    def register_inator(self, original_name:str, sanitized_name:str):
+
+        hash_id = self.hash_inator(sanitized_name)
+        conn = sqlite3.connect(self.DB_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+        INSERT INTO registry (original_name, sanitized_name, hash_id)
+        VALUES (?,?, ?)
+        ON CONFLICT(hash_id) DO UPDATE SET
+            last_updated = CURRENT_TIMESTAMP
+        """, (original_name, sanitized_name, hash_id))
+
+        conn.commit()
+        conn.close()
+
+        return hash_id
+
+    def updater_inator(self, status: str , hash_id: str):
+        conn = sqlite3.connect(self.DB_PATH)
+        cursor = conn.cursor()
+
+        if status in ("converted", "embedded"):
+            cursor.execute(f"""
+            UPDATE registry
+            SET {status} = 1,
+                last_updated = CURRENT_TIMESTAMP
+            WHERE hash_id = ?
+            """, (hash_id,))
+
+            print(f"[DEBUG] Updated {status} for hash_id={hash_id} → {cursor.rowcount} rows affected")
+
+        conn.commit()
+        conn.close()
+
+    def check_inator(self, hash_id: str, field: str = "") -> bool:
+
+        """
+            Check if a file exists or if a flag is set.
+        """
+
+        conn = sqlite3.connect(self.DB_PATH)
+        cursor = conn.cursor()
+
+        if field:
+            cursor.execute(f"SELECT {field} FROM registry WHERE hash_id = ?",(hash_id,))
+        else:
+            cursor.execute("SELECT 1 FROM registry WHERE hash_id = ?", (hash_id,))
+
+        result = cursor.fetchone()
+        conn.close()
+        return bool(result and (result[0] if field else True))
+
+    def show_all_inator(self):
+        """Print all rows in the registry table for debugging"""
+        conn = sqlite3.connect(self.DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM registry")
+        rows = cursor.fetchall()
+        conn.close()
+
+        columns = ["ids", "original_name", "sanitized_name","hash_id", "converted", "embedded"]
+        data = [dict(zip(columns,row)) for row in rows]
+        return data
+
+    def reset_inator(self, status, hash_id=None):
+        VALID_COLUMNS = {"embedded", "converted"}
+        
+        if status not in VALID_COLUMNS:
+            raise ValueError("Invalid status field")
+
+        conn = sqlite3.connect(self.DB_PATH)
+        cursor = conn.cursor()
+        try:
+            if hash_id:
+                cursor.execute(f"""
+                UPDATE registry
+                SET {status} = 0
+                WHERE hash_id = ?
+                """,(hash_id))
+            else:
+                cursor.execute(f"UPDATE registry SET {status} = 0")
+            conn.commit()
+            count = cursor.rowcount
+            return count
+
+        finally:
+            conn.close()
