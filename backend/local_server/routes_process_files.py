@@ -1,7 +1,7 @@
 # %%
 import pymupdf
 from pathlib import Path
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, Request, UploadFile, File, HTTPException
 
 from cerebrum_core.ingest_inator import IngestInator
 from cerebrum_core.file_manager_inator import file_walker_inator
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/process")
 markdown_files_dir = Path("../data/storage/markdown")
 knowledgebase_dir = Path("../data/knowledgebase")
 embedding_model = "qwen3-embedding:4b-q4_K_M"
-llm_model = "mistral:7b"
+llm_model = "granite3.1-dense:2b"
 
 
 # ==========================================================
@@ -50,6 +50,67 @@ def markdown_converter_inator(knowledgebase_dir: Path, llm_model: str, registry)
 
         except Exception as e:
             print(f"Failed for {file_info['filename']}: {e}")
+
+
+# ==========================================================
+# SINGLE FILE PROCESSOR (for uploads)
+# ==========================================================
+def process_single_pdf(file_path: Path, llm_model: str, embedding_model: str, registry):
+    """Process a single PDF: convert to markdown then embed"""
+    print(f"Processing uploaded file: {file_path.name}")
+    
+    try:
+        # Step 1: Convert PDF to Markdown
+        with pymupdf.open(file_path) as pdf:
+            metadata = pdf.metadata
+        
+        markdown_files = IngestInator(filepath=file_path)
+        sanitized_metadata = markdown_files.sanitize_inator(
+            filename=file_path.stem,
+            metadata=metadata,
+            llm_model=llm_model
+        )
+        
+        hash_id = registry.hash_inator(filename=sanitized_metadata.title)
+        registry.register_inator(
+            original_name=file_path.stem,
+            sanitized_name=sanitized_metadata.title
+        )
+        
+        # Convert to markdown
+        markdown_files.markdown_inator(metadata=sanitized_metadata)
+        registry.updater_inator(status="converted", hash_id=hash_id)
+        print(f" Converted: {file_path.name}")
+        
+        # Step 2: Find the generated markdown file and embed it
+        markdown_file_path = markdown_files_dir / sanitized_metadata.domain / sanitized_metadata.subject / f"{sanitized_metadata.title}.md"
+        
+        if markdown_file_path.exists():
+            vectorstores_path = Path(
+                f"../data/storage/vectorstores/{sanitized_metadata.domain}/{sanitized_metadata.subject}"
+            )
+            vectorstores_path.mkdir(parents=True, exist_ok=True)
+            
+            markdown_chunks = IngestInator(
+                filepath=markdown_file_path,
+                embedding_model=embedding_model,
+                vectorstores_path=vectorstores_path
+            )
+            
+            chunks = markdown_chunks.chunk_inator(markdown_filepath=markdown_file_path)
+            total = len(chunks)
+            
+            for idx, chunk in enumerate(chunks, start=1):
+                markdown_chunks.embedd_inator(chunk=chunk, collection_name=sanitized_metadata.subject)
+                progress_bar(idx, total)
+            
+            registry.updater_inator(status="embedded", hash_id=hash_id)
+            print(f" Embedded: {file_path.name}")
+        else:
+            print(f" Markdown file not found: {markdown_file_path}")
+            
+    except Exception as e:
+        print(f" Failed to process {file_path.name}: {e}")
 
 
 # ==========================================================
@@ -124,4 +185,50 @@ async def embedd_files(background_tasks: BackgroundTasks, request: Request):
     reg = request.app.state.registry
     background_tasks.add_task(markdown_embedder_inator, markdown_files_dir, embedding_model, reg)
     return {"message": "Embedding started in background"}
+
+
+@router.post("/upload")
+async def upload_pdf(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    file: UploadFile = File(...)
+):
+    """Upload a PDF file and auto-process it"""
+    # Validate file type
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    
+    # Ensure knowledgebase directory exists
+    knowledgebase_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save file
+    if file.filename is None:
+        raise ValueError("filename cannot be None")
+
+    file_path = knowledgebase_dir / file.filename
+    
+    try:
+        contents = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(contents)
+        
+        # Auto-process the uploaded PDF
+        if background_tasks and request:
+            reg = request.app.state.registry
+            # Convert to markdown
+            background_tasks.add_task(
+                process_single_pdf,
+                file_path,
+                llm_model,
+                embedding_model,
+                reg
+            )
+        
+        return {
+            "message": "PDF uploaded and queued for processing",
+            "filename": file.filename,
+            "path": str(file_path)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 

@@ -1,13 +1,28 @@
 import json
+import logging
 
+import os
 from pathlib import Path
 from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
 from langchain_ollama import OllamaLLM
+from langchain_ollama import OllamaEmbeddings
 
 from agents.rose import RosePrompts
 from cerebrum_core.model_inator import TranslatedQuery
 from cerebrum_core.file_manager_inator import knowledgebase_index_inator
+
+
+os.makedirs("./logs", exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler("logs/cerebrum_debug.log"),
+        logging.StreamHandler()  # optional: still prints to console
+    ]
+)
+logger = logging.getLogger("cerebrum")
+
 
 class RetrieverInator:
     """
@@ -43,6 +58,7 @@ class RetrieverInator:
             available_stores=available_stores
         )
         translated_query = self.llm_model.invoke(filled_prompt)
+        logging.info(f"Raw translated query: {translated_query!r}")
 
         try: 
             parsed_query = json.loads(translated_query)
@@ -58,13 +74,29 @@ class RetrieverInator:
         """
         # WARN: vectorstore matching has not been implemented
         # the constructor returns subqueries and routes to relevant vectorstores 
-        self.constructed_query = {
-            "routes": [
-                {"subquery": subquery,
-                 "path":f"{self.vectorstores_root}/{subquery.domain}/{subquery.subject}" }
-                for subquery in translated_query.subqueries
-            ]
-        }
+
+        available_stores, _ = knowledgebase_index_inator(Path(self.vectorstores_root))
+        valid_paths = set()
+        for domain in available_stores["domains"]:
+            for subject in available_stores["subjects"]:
+                valid_paths.add((domain, subject))
+
+
+        self.constructed_query = {"routes": []}
+
+        for subquery in translated_query.subqueries:
+            domain = subquery.domain
+            subject = subquery.subject
+
+            if not domain or not subject:
+                logging.warning("skipping subquery with missing domain/subject")
+                continue
+
+            if (domain, subject) not in valid_paths:
+                logging.warning(f"Invalid domain/subject pair: ({domain}, {subject}) skippng subquery")
+                continue
+            path = Path(self.vectorstores_root)/domain/subject
+            self.constructed_query["routes"].append({"subquery": subquery, "path": str(path)})
 
         return self.constructed_query
 
@@ -74,7 +106,7 @@ class RetrieverInator:
             and generates final response
         """
 
-        # TODO: similarity_search vs as_retriever 
+       # TODO: similarity_search vs as_retriever 
         for route in self.constructed_query["routes"]:
             store = Chroma (
                 collection_name=route["subquery"].subject,
@@ -90,18 +122,56 @@ class RetrieverInator:
 
         return self.all_results
 
-    def generate_inator(self, user_query:str):
+    def generate_inator(self, user_query: str, top_k_chunks: int = 5):
+        """
+        Generates a response to user_query using retrieved documents,
+        summarizing and deduplicating chunks, and producing tiered output.
+        """
+        # Flatten retrieved documents
         flat_docs = [doc for docs in self.all_results for doc in docs]
-        context_text = "\n\n".join(doc.page_content for doc in flat_docs)
 
+        # Deduplicate chunks based on page_content
+        seen = set()
+        dedup_docs = []
+        for doc in flat_docs:
+            if doc.page_content not in seen:
+                seen.add(doc.page_content)
+                dedup_docs.append(doc)
+
+        # Optionally limit to top_k_chunks
+        selected_docs = dedup_docs[:top_k_chunks]
+
+        # Step 1: Summarize each chunk individually to reduce noise
+        chunk_summaries = []
+        for doc in selected_docs:
+            summary_prompt = f"""
+            Summarize the following text in 1–2 sentences, keeping only the key factual information:
+            {doc.page_content}
+            """
+            summary = self.llm_model.invoke(summary_prompt)
+            chunk_summaries.append(summary.strip())
+
+        # Step 2: Combine summaries as context
+        context_text = "\n\n".join(chunk_summaries)
+
+        # Step 3: Tiered answer prompt
         base_prompt = RosePrompts.get_prompt("rose_answer")
         if not base_prompt:
             raise ValueError("Prompt 'rose_answer' not found in RosePrompts")
 
-        final_prompt = base_prompt.format(
+        # Modify prompt to include tiered instructions
+        final_prompt = base_prompt + "\n\nAdditional Instructions:\n" \
+            "- First give a 1–2 sentence summary answer.\n" \
+            "- Then, if relevant, provide a more detailed explanation under 'Further Explanation:'.\n" \
+            "- Condense overlapping info and avoid repeating facts.\n" \
+            "- Only use the provided context; do not hallucinate."
+
+        final_prompt = final_prompt.format(
             question=user_query,
             context=context_text
         )
 
+        # Step 4: Invoke LLM
         response = self.llm_model.invoke(final_prompt)
         return response
+

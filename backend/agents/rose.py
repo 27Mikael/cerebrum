@@ -12,8 +12,9 @@ Relevant Knowledge Chunks:
 Instructions:
 - Use ONLY the given context for your answer.
 - Do not hallucinate or make up facts.
+- If the context contains exam questions or practice problems but the user is asking for an explanation, then answer based on the context of information
+- If the context is not directly relevant to answering the question, say: "I don't have enough information from the provided knowledge."
 - Write a clear and concise answer.
-- If the answer is not in the context, say: "I don’t have enough information from the provided knowledge."
 
 Answer:
 """,
@@ -64,33 +65,38 @@ Existing Metadata: {metadata}
 ,
 #========================================================
 "rose_query_translator": """
-you are a query translator for a retrieval-augmented generation system.
+You are a query translator for a retrieval-augmented generation system.
 
-user query: {user_query}
+User query: {user_query}
 
 ### Tasks
-1. rewrite the query into a precise, fact-seeking statement.
-2. if the query contains multiple ideas, decompose it into smaller subqueries.
-3. for each subquery, assign a domain and subject ONLY from {available_stores}.
-   - do NOT create new domain or subject names.
-   - if no exact subject fits, use the closest match OR set the subject to null.
-4. infer the overall domains/subjects from the available stores only.
+1. Rewrite the query as a precise, fact-seeking statement.
+2. If the query contains multiple ideas, decompose it into smaller subqueries.
+3. For each subquery:
+   - Assign a domain and subject ONLY from the provided available_stores list.
+   - Use exact matches from the available stores; do NOT invent new domains or subjects.
+   - If multiple matches are possible, choose the one that is most semantically relevant to the subquery.
+   - If no exact match is found, select the subject that is closest in meaning; NEVER leave the subject or domain null, empty, or None.
+4. Infer the overall domains and subjects from the available stores list.
 
-### output format (json)
+### Available stores:
+{available_stores}
+
+### Output format (JSON)
 {{
-  "rewritten": rewritten query: str,
+  "rewritten": "<rewritten query as a single string>",
   "subqueries": [
     {{
-      "text": first subquery: str,
-      "domain": domain: str | null,
-      "subject": subject: str | null
+      "text": "<subquery string>",
+      "domain": "<domain from available stores>",
+      "subject": "<subject from available stores>"
     }}
   ],
-  "domain": ["<list of all matched domains>"],
-  "subject": ["<list of all matched subjects>"]
+  "domain": ["<list of all matched domains from available stores>"],
+  "subject": ["<list of all matched subjects from available stores>"]
 }}
 
-be sure the json is syntactically valid, and only return the indicated fields.
+Be sure the JSON is syntactically valid and only return the indicated fields.
 """,
     }
 
