@@ -5,7 +5,6 @@ import tiktoken
 import pymupdf4llm
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
-from cerebrum_core.file_manager_inator import knowledgebase_index_inator, FileRegisterInator
 from cerebrum_core.ingest_inator import IngestInator
 from cerebrum_core.retriever_inator import RetrieverInator
 doc = pathlib.Path("../data/storage/markdown/chemistry/biochemistry/lehninger-principles-of-biochemistry.md")
@@ -13,6 +12,16 @@ pdf_path = pathlib.Path("../data/knowledgebase/biology/physiology/Johnny Hall - 
 
 
 # %% 
+from pathlib import Path
+from cerebrum_core.file_manager_inator import knowledgebase_index_inator
+
+test, testfile = knowledgebase_index_inator(Path("../data/storage/vectorstores"))
+for test in test:
+    print(test["domain"])
+    print(test["subject"])
+    print(testfile)
+
+
 with pymupdf.open(pdf_path) as file:
     metadata = file.metadata
 to_md = IngestInator(
@@ -21,15 +30,13 @@ to_md = IngestInator(
 clean_md = to_md.sanitize_inator(
     filename=pdf_path.name,
     metadata=file.metadata,
-    llm_model="mistral:7b"
+    llm_model="granite3.1-dense:2b"
 )
 print(file.metadata)
 print(clean_md)
 chunks = to_md.chunk_inator(markdown_filepath=doc)
-print(chunks[43].page_content)
-print(chunks[43].metadata)
-print(len(chunks))
-
+for chunk in chunks:
+    print(chunk.metadata)
 
 #%%
 
@@ -38,7 +45,7 @@ query = "Describe DNA"
 retrieve = RetrieverInator(
     vectorstores_root = "../data/storage/vectorstores",
     embedding_model="qwen3-embedding:4b-q4_K_M",
-    llm_model = "mistral:7b"
+    llm_model = "granite3.1-dense:2b"
 )
 
 translated_query = retrieve.translator_inator(user_query=query)
@@ -52,7 +59,7 @@ print(constructor)
 for route in constructor["routes"]:
     print(route["subquery"].subject)
 
-retrieve.retrieve_inator(collection_name="david-s-latchman-gene-control")
+retrieve.retrieve_inator()
 response = retrieve.generate_inator(user_query=query)
 print(response)
 

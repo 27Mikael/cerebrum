@@ -1,17 +1,21 @@
+import logging
 from fastapi import APIRouter
 from pydantic import BaseModel
 from cerebrum_core.retriever_inator import *
 
-router = APIRouter(prefix="/chat", tags=["Data API"])
+router = APIRouter(prefix="/chat", tags=["Chat API"])
 
-llm_model="mistral:7b"
-embedding_model ="embeddinggemma:latest"
-vectorstores_root = "../data/storage/vectordb"
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+llm_model="granite3.1-dense:2b"
+embedding_model="qwen3-embedding:4b-q4_K_M"
+vectorstores_root="../data/storage/vectorstores"
 
 class Query(BaseModel):
     text : str
 
-@router.get("/chat")
+@router.post("/")
 async def ask_rose(query: Query):
     """
         Determine the ontology of the Study Bubble
@@ -29,10 +33,12 @@ async def ask_rose(query: Query):
     translated_query = process_query.translator_inator(
         user_query=query.text
     )
+
+    logger.info("Translated wuery dict: %s", translated_query)
     # TODO: dynamically generate the vectorstores
     process_query.constructor_inator(translated_query=translated_query)
 
     process_query.retrieve_inator()
     response = process_query.generate_inator(user_query=query.text)
-    return response
+    return {"reply": response}
 

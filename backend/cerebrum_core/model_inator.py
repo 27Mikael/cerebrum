@@ -48,13 +48,13 @@ class KnowledgeBase(BaseModel):
 
 class Subquery(BaseModel):
     text: str
-    domain: str
-    subject: str
+    domain: Optional[str] = None
+    subject: Optional[str] = None
 
 class TranslatedQuery(BaseModel):
     rewritten: str
-    domain: str | List[str]
-    subject: str | List[str]
+    domain: Optional[str | List[str]] = None
+    subject: Optional[str | List[str]] = None
     subqueries: List[Subquery]
 
 class FileMetadata(BaseModel):
@@ -66,3 +66,11 @@ class FileMetadata(BaseModel):
 
 class Chunk(BaseModel):
      pass
+
+
+class NoteBase(BaseModel):
+    title: str
+    content: str
+
+class NoteOut(NoteBase):
+    filename: str
