@@ -24,3 +24,45 @@
 2025-10-27 18:24:13,776 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
 2025-10-27 18:24:17,978 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
 2025-10-27 18:24:36,781 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 21:16:09,650 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 21:16:22,016 [INFO] root: Raw translated query: '{\n  "rewritten": "What are the fundamental processes that enable DNA to store, replicate, and express genetic information?",\n  "subqueries": [\n    {\n      "text": "What are the primary functions of DNA?",\n      "domain": "biology",\n      "subject": "genetics"\n    },\n    {\n      "text": "How does DNA replication occur?",\n      "domain": "biology",\n      "subject": "genetics"\n    },\n    {\n      "text": "How is genetic information expressed from DNA?",\n      "domain": "biology",\n      "subject": "genetics"\n    }\n  ],\n  "domain": ["biology"],\n  "subject": ["genetics"]\n}'
+2025-10-27 21:16:22,016 [INFO] local_server.routes_chat: Translated wuery dict: rewritten='What are the fundamental processes that enable DNA to store, replicate, and express genetic information?' domain=['biology'] subject=['genetics'] subqueries=[Subquery(text='What are the primary functions of DNA?', domain='biology', subject='genetics'), Subquery(text='How does DNA replication occur?', domain='biology', subject='genetics'), Subquery(text='How is genetic information expressed from DNA?', domain='biology', subject='genetics')]
+2025-10-27 21:16:22,019 [INFO] chromadb.telemetry.product.posthog: Anonymized telemetry enabled. See                     https://docs.trychroma.com/telemetry for more information.
+2025-10-27 21:16:22,892 [INFO] backoff: Backing off send_request(...) for 0.3s (requests.exceptions.ConnectionError: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')))
+2025-10-27 21:16:26,113 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/embed "HTTP/1.1 200 OK"
+2025-10-27 21:16:29,751 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/embed "HTTP/1.1 200 OK"
+2025-10-27 21:16:30,539 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/embed "HTTP/1.1 200 OK"
+2025-10-27 21:19:32,801 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 21:22:07,431 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 21:22:12,877 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 21:25:25,469 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 21:25:54,519 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 21:27:04,132 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 21:44:37,490 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 21:44:44,108 [INFO] root: Raw translated query: '{\n  "rewritten": "What role does Vitamin B play in blood production?",\n  "subqueries": [\n    {\n      "text": "How does Vitamin B contribute to nutrition for blood production?",\n      "domain": "nutrition",\n      "subject": "Vitamin B"\n    }\n  ],\n  "domain": ["biology"],\n  "subject": ["nutrition"]\n}'
+2025-10-27 21:44:44,108 [INFO] local_server.routes_chat: Translated wuery dict: rewritten='What role does Vitamin B play in blood production?' domain=['biology'] subject=['nutrition'] subqueries=[Subquery(text='How does Vitamin B contribute to nutrition for blood production?', domain='nutrition', subject='Vitamin B')]
+2025-10-27 21:44:44,109 [WARNING] root: Invalid domain/subject pair: (nutrition, Vitamin B) skippng subquery
+2025-10-27 21:44:51,168 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 21:51:19,820 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 21:51:49,454 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 21:55:50,271 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 22:08:54,438 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 22:09:06,651 [INFO] root: Raw translated query: '{\n  "rewritten": "How does DNA function as a genetic material?",\n  "subqueries": [\n    {\n      "text": "What role does DNA play in the storage and transmission of genetic information?",\n      "domain": "biology",\n      "subject": "genetics"\n    }\n  ],\n  "domain": ["biology"],\n  "subject": ["genetics"]\n}'
+2025-10-27 22:09:06,651 [INFO] local_server.routes_chat: Translated wuery dict: rewritten='How does DNA function as a genetic material?' domain=['biology'] subject=['genetics'] subqueries=[Subquery(text='What role does DNA play in the storage and transmission of genetic information?', domain='biology', subject='genetics')]
+2025-10-27 22:09:07,604 [INFO] chromadb.telemetry.product.posthog: Anonymized telemetry enabled. See                     https://docs.trychroma.com/telemetry for more information.
+2025-10-27 22:09:14,622 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/embed "HTTP/1.1 200 OK"
+2025-10-27 22:09:36,863 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 22:09:45,803 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 22:09:50,259 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 22:15:17,430 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 22:15:33,218 [INFO] root: Raw translated query: '{\n  "rewritten": "How does DNA function?",\n  "subqueries": [\n    {\n      "text": "Describe the structure of DNA",\n      "domain": "biology",\n      "subject": "genetics"\n    },\n    {\n      "text": "Explain the role of DNA in genetic information storage and transmission",\n      "domain": "biology",\n      "subject": "genetics"\n    }\n  ],\n  "domain": ["biology"],\n  "subject": ["genetics"]\n}'
+2025-10-27 22:15:33,219 [INFO] local_server.routes_chat: Translated wuery dict: rewritten='How does DNA function?' domain=['biology'] subject=['genetics'] subqueries=[Subquery(text='Describe the structure of DNA', domain='biology', subject='genetics'), Subquery(text='Explain the role of DNA in genetic information storage and transmission', domain='biology', subject='genetics')]
+2025-10-27 22:15:34,214 [INFO] chromadb.telemetry.product.posthog: Anonymized telemetry enabled. See                     https://docs.trychroma.com/telemetry for more information.
+2025-10-27 22:15:39,783 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/embed "HTTP/1.1 200 OK"
+2025-10-27 22:15:42,102 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/embed "HTTP/1.1 200 OK"
+2025-10-27 22:19:39,372 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 22:23:05,707 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 22:24:28,481 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 22:24:56,355 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 22:25:07,088 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-10-27 22:26:31,958 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"

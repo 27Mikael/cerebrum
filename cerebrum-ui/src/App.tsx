@@ -237,8 +237,8 @@ export default function App() {
           <li
             onClick={() => setViewMode("chat")}
             className={`p-3 rounded-lg cursor-pointer transition border ${viewMode === "chat"
-                ? "bg-emerald-600 border-emerald-500"
-                : "bg-slate-800 hover:bg-slate-700 border-slate-700"
+              ? "bg-emerald-600 border-emerald-500"
+              : "bg-slate-800 hover:bg-slate-700 border-slate-700"
               }`}
           >
             <span className="text-lg">💬 Chat</span>
@@ -249,8 +249,8 @@ export default function App() {
               setNotesView("list");
             }}
             className={`p-3 rounded-lg cursor-pointer transition border ${viewMode === "notes"
-                ? "bg-emerald-600 border-emerald-500"
-                : "bg-slate-800 hover:bg-slate-700 border-slate-700"
+              ? "bg-emerald-600 border-emerald-500"
+              : "bg-slate-800 hover:bg-slate-700 border-slate-700"
               }`}
           >
             <span className="text-lg">📝 Notes</span>
@@ -302,8 +302,8 @@ export default function App() {
                   <div
                     key={i}
                     className={`p-4 rounded-xl max-w-2xl shadow-lg border-2 ${msg.role === "user"
-                        ? "bg-indigo-600 border-indigo-500 ml-auto text-white"
-                        : "bg-slate-800 border-slate-600 text-gray-100"
+                      ? "bg-indigo-600 border-indigo-500 ml-auto text-white"
+                      : "bg-slate-800 border-slate-600 text-gray-100"
                       }`}
                   >
                     <div className="text-xs font-semibold mb-1 opacity-70">

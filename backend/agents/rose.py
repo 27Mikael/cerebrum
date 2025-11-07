@@ -96,7 +96,9 @@ User query: {user_query}
   "subject": ["<list of all matched subjects from available stores>"]
 }}
 
-Be sure the JSON is syntactically valid and only return the indicated fields.
+Be sure the JSON is syntactically valid and ONLY return the indicated fields, in
+the JSON output, if a field is missing, return null do not return any other
+feedback except the specified json.
 """,
     }
 
