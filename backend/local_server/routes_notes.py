@@ -6,7 +6,7 @@ from cerebrum_core.model_inator import NoteOut, NoteBase
 
 router = APIRouter(prefix="/notes", tags=["Notes API"])
 
-NOTES_DIR = Path("../data/storage/notes")
+NOTES_DIR = Path("/home/harbinger/data/storage/notes")
 NOTES_DIR.mkdir(exist_ok=True)
  
 
