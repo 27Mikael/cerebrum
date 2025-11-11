@@ -20,7 +20,7 @@ class _CerebrumState extends State<Cerebrum> {
 
   Widget _buildPage() {
     if (selectedPage == 0) {
-      return Center(child: Text('Learn'));
+      return HomePage();
     } else if (selectedPage == 1) {
       return Center(child: Text('Learn'));
     } else if (selectedPage == 2) {

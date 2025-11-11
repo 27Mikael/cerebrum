@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 Future<String> askRose(String question) async {
-  final url = Uri.parse("http://localhost:8000/ask");
+  final url = Uri.parse("http://localhost:8000/chat/");
   final response = await http.post(
     url,
     headers: {"Content-Type": "application/json"},
