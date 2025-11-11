@@ -20,7 +20,7 @@ class _CerebrumState extends State<Cerebrum> {
 
   Widget _buildPage() {
     if (selectedPage == 0) {
-      return HomePage();
+      return Center(child: Text('Learn'));
     } else if (selectedPage == 1) {
       return Center(child: Text('Learn'));
     } else if (selectedPage == 2) {
@@ -89,7 +89,7 @@ class _CerebrumState extends State<Cerebrum> {
               // Right side: main window
               Expanded(
                 child: Container(
-                  height: MediaQuery.of(context).size.height * 0.98,
+                  height: MediaQuery.of(context).size.height * 1.2,
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(12),
