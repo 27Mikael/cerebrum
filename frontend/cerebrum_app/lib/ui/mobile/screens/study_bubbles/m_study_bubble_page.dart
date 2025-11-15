@@ -1,0 +1,69 @@
+import 'package:flutter/material.dart';
+
+class MobileStudyBubblePage extends StatefulWidget {
+  const MobileStudyBubblePage({super.key});
+
+  @override
+  State<MobileStudyBubblePage> createState() => _MobileStudyBubblePageState();
+}
+
+class _MobileStudyBubblePageState extends State<MobileStudyBubblePage> {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          //top content
+          Padding(
+            padding: const EdgeInsets.only(top: 80, left: 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "Study Bubble name goes here",
+                  style: TextStyle(color: Colors.white),
+                ),
+                Text(
+                  "Description goes here",
+                  style: TextStyle(color: Colors.white),
+                ),
+              ],
+            ),
+          ),
+          // bottom content
+          DraggableScrollableSheet(
+            initialChildSize: 0.55,
+            minChildSize: 0.55,
+            maxChildSize: 1,
+            builder: (context, scrollController) {
+              return Container(
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(35)),
+                ),
+                child: ListView(
+                  controller: scrollController,
+                  children: [
+                    const SizedBox(height: 20),
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.grey[300],
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}

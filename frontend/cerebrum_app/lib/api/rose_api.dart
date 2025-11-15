@@ -6,12 +6,12 @@ Future<String> askRose(String question) async {
   final response = await http.post(
     url,
     headers: {"Content-Type": "application/json"},
-    body: jsonEncode({"question": question}),
+    body: jsonEncode({"text": question}),
   );
 
   if (response.statusCode == 200) {
     final data = jsonDecode(response.body);
-    return data["hint"] ?? "No hint provided.";
+    return data["reply"] ?? "No reply provided.";
   } else {
     throw Exception("Failed to get hint from Rose.");
   }

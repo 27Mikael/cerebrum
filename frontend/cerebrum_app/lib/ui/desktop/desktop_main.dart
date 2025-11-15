@@ -1,15 +1,16 @@
 import 'package:cerebrum_app/features/chat/chat.dart';
+import 'package:cerebrum_app/features/notes/note_page.dart';
 import 'package:flutter/material.dart';
-import './features/home/home_page.dart';
+import '/features/home/home_page.dart';
 
-class Cerebrum extends StatefulWidget {
-  const Cerebrum({super.key});
+class DesktopUI extends StatefulWidget {
+  const DesktopUI({super.key});
 
   @override
-  State<Cerebrum> createState() => _CerebrumState();
+  State<DesktopUI> createState() => _DesktopUIState();
 }
 
-class _CerebrumState extends State<Cerebrum> {
+class _DesktopUIState extends State<DesktopUI> {
   int selectedPage = 0;
 
   void changePage(int page) {
@@ -24,7 +25,7 @@ class _CerebrumState extends State<Cerebrum> {
     } else if (selectedPage == 1) {
       return Center(child: Text('Learn'));
     } else if (selectedPage == 2) {
-      return Center(child: Text("Mika Stinks,Also, Cugushi"));
+      return NotesPage();
     } else if (selectedPage == 3) {
       return ChatPage();
     }
@@ -62,7 +63,7 @@ class _CerebrumState extends State<Cerebrum> {
                       ),
                     ),
                     onPressed: () => changePage(1),
-                    child: Text('Learn'),
+                    child: Text('Study Bubble'),
                   ),
                   TextButton(
                     style: ButtonStyle(
@@ -71,7 +72,7 @@ class _CerebrumState extends State<Cerebrum> {
                       ),
                     ),
                     onPressed: () => changePage(2),
-                    child: Text("Review"),
+                    child: Text("Projects"),
                   ),
                   TextButton(
                     style: ButtonStyle(
