@@ -30,7 +30,7 @@ to_md = IngestInator(
 clean_md = to_md.sanitize_inator(
     filename=pdf_path.name,
     metadata=file.metadata,
-    llm_model="granite3.1-dense:2b"
+    llm_model="granite4:micro"
 )
 print(file.metadata)
 print(clean_md)
@@ -45,7 +45,7 @@ query = "Describe DNA"
 retrieve = RetrieverInator(
     vectorstores_root = "../data/storage/vectorstores",
     embedding_model="qwen3-embedding:4b-q4_K_M",
-    llm_model = "granite3.1-dense:2b"
+    llm_model = "granite4:micro"
 )
 
 translated_query = retrieve.translator_inator(user_query=query)

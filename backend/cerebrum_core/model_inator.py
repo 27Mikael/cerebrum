@@ -1,10 +1,10 @@
-from pydantic import BaseModel
+from datetime import datetime
+from pydantic import BaseModel, Field
 from typing import Optional, List 
 
 class Subtopic(BaseModel):
     name: str
     description: str
-
 
 class Topic(BaseModel):
     name: str
@@ -46,6 +46,13 @@ class KnowledgeBase(BaseModel):
         self.domains.append(domain)
         return domain
 
+#############################################################################
+#
+#                               QUERY MODELS FOR LLM INTERACTIONS
+#
+############################################################################
+
+
 class Subquery(BaseModel):
     text: str
     domain: Optional[str] = None
@@ -68,9 +75,55 @@ class Chunk(BaseModel):
      pass
 
 
+#############################################################################
+#
+#                               MODELS FOR NOTES AND CONTENT SHARING
+#
+############################################################################
+
 class NoteBase(BaseModel):
     title: str
     content: str
 
 class NoteOut(NoteBase):
     filename: str
+
+
+
+#############################################################################
+#
+#                               MODELS FOR INTERACTIVE USER LEARNING
+#
+#############################################################################
+
+class Quiz(BaseModel):
+    question: str
+    answer: str
+    options: List[str] = []
+
+class Review(BaseModel):
+    misconception: str
+
+class CreateStudyBubble(BaseModel):
+    name: str
+    description: str = ""
+    domains: List[str] = Field(default_factory=list)
+    user_goals: List[str] = Field(default_factory=list)
+
+class StudyBubble(CreateStudyBubble):
+    id: str
+    created_at: datetime
+
+class CreateResearchProject(BaseModel):
+    name: str
+    description: str = ""
+    domains: List[str] = Field(default_factory=list)
+    user_goals: List[str] = Field(default_factory=list)
+
+class ResearchProject(CreateResearchProject):
+    id: str
+    created_at: datetime
+
+
+
+

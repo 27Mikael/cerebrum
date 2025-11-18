@@ -1,8 +1,5 @@
 import 'package:cerebrum_app/features/home/home_page.dart';
-import 'package:cerebrum_app/features/notes/note_page.dart';
-import 'package:cerebrum_app/features/chat/chat.dart';
-import 'package:cerebrum_app/ui/mobile/screens/study_bubbles/m_study_bubble_home.dart';
-import 'package:cerebrum_app/ui/mobile/screens/study_bubbles/m_study_bubble_page.dart';
+import 'package:cerebrum_app/ui/mobile/screens/m_library_page.dart';
 import 'package:flutter/material.dart';
 
 class MobileUI extends StatefulWidget {
@@ -23,7 +20,7 @@ class _MobileUIState extends State<MobileUI> {
         return HomePage();
       case 1:
         // replace with librarypage
-        return MStudyBubbleHome();
+        return MLibraryPage();
       case 2:
         return Text("User Settings");
       default:
@@ -44,12 +41,12 @@ class _MobileUIState extends State<MobileUI> {
             label: 'Home',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.note_rounded),
-            label: 'Studdy Bubble',
+            icon: Icon(Icons.library_books_rounded),
+            label: 'Library',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.chat_rounded),
-            label: 'Projects',
+            icon: Icon(Icons.settings),
+            label: 'Settings',
           ),
         ],
       ),

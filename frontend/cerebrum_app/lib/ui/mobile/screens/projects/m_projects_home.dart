@@ -1,33 +1,33 @@
 import 'package:flutter/material.dart';
 
-class MProjectsHome extends StatefulWidget {
-  const MProjectsHome({super.key});
+class MStudyBubbleHome extends StatefulWidget {
+  const MStudyBubbleHome({super.key});
 
   @override
-  State<MProjectsHome> createState() => _MProjectsHomeState();
+  State<MStudyBubbleHome> createState() => _MStudyBubbleHomeState();
 }
 
-class _MProjectsHomeState extends State<MProjectsHome> {
-  List<Map<String, dynamic>> projects = [];
+class _MStudyBubbleHomeState extends State<MStudyBubbleHome> {
+  List<Map<String, dynamic>> bubbles = [];
 
   @override
   void initState() {
     super.initState();
-    fetchProjects();
+    fetchBubbles();
   }
 
-  Future<void> fetchProjects() async {
+  Future<void> fetchBubbles() async {
     // TODO: Replace with your API call
     await Future.delayed(const Duration(milliseconds: 100));
     setState(() {
-      projects = [
-        {'title': 'Project 1', 'description': 'Description 1'},
-        {'title': 'Project 2', 'description': 'Description 2'},
+      bubbles = [
+        {'title': 'Bubble 1', 'description': 'Description 1'},
+        {'title': 'Bubble 2', 'description': 'Description 2'},
       ];
     });
   }
 
-  void addProject() async {
+  void addBubble() async {
     await showModalBottomSheet(
       context: context,
       builder:
@@ -38,11 +38,11 @@ class _MProjectsHomeState extends State<MProjectsHome> {
               children: [
                 ListTile(
                   leading: const Icon(Icons.add),
-                  title: const Text("Add Project"),
+                  title: const Text("Add Study Bubble"),
                   onTap: () {
                     Navigator.pop(context);
-                    // TODO: call API to create project
-                    fetchProjects(); // refresh list after creation
+                    // TODO: call API to create bubble
+                    fetchBubbles(); // refresh list after creation
                   },
                 ),
               ],
@@ -55,18 +55,18 @@ class _MProjectsHomeState extends State<MProjectsHome> {
   Widget build(BuildContext context) {
     return Scaffold(
       floatingActionButton: FloatingActionButton(
-        onPressed: addProject,
+        onPressed: addBubble,
         child: const Icon(Icons.add),
       ),
       body: ListView.builder(
-        itemCount: projects.length,
+        itemCount: bubbles.length,
         itemBuilder: (context, index) {
-          final project = projects[index];
+          final bubble = bubbles[index];
           return ListTile(
-            title: Text(project['title'] ?? 'Untitled'),
-            subtitle: Text(project['description'] ?? ''),
+            title: Text(bubble['title'] ?? 'Untitled'),
+            subtitle: Text(bubble['description'] ?? ''),
             onTap: () {
-              // Optional: open project detail
+              // Optional: open bubble detail
             },
           );
         },

@@ -9,7 +9,7 @@ from langchain_ollama import OllamaEmbeddings
 
 from agents.rose import RosePrompts
 from cerebrum_core.model_inator import TranslatedQuery
-from cerebrum_core.file_manager_inator import knowledgebase_index_inator
+from cerebrum_core.file_manager_inator import CerebrumPaths, knowledgebase_index_inator
 
 
 os.makedirs("./logs", exist_ok=True)
@@ -22,6 +22,7 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("cerebrum")
+vector_path = CerebrumPaths()
 
 
 class RetrieverInator:

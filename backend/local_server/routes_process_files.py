@@ -4,15 +4,18 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, Request, UploadFile, File, HTTPException
 
 from cerebrum_core.ingest_inator import IngestInator
-from cerebrum_core.file_manager_inator import file_walker_inator
+from cerebrum_core.file_manager_inator import CerebrumPaths, file_walker_inator
 from cerebrum_core.utils.progress_bar import progress_bar
 
 router = APIRouter(prefix="/process")
+paths = CerebrumPaths()
 
-markdown_files_dir = Path("../data/storage/markdown")
-knowledgebase_dir = Path("../data/knowledgebase")
+markdown_files_dir = paths.get_kb_dir() / "markdown"
+markdown_files_dir.mkdir(parents=True, exist_ok=True)
+
+knowledgebase_dir = paths.get_kb_dir()
 embedding_model = "qwen3-embedding:4b-q4_K_M"
-llm_model = "granite3.1-dense:2b"
+llm_model = "granite4:micro"
 
 
 # ==========================================================
@@ -205,7 +208,8 @@ async def upload_pdf(
     if file.filename is None:
         raise ValueError("filename cannot be None")
 
-    file_path = knowledgebase_dir / file.filename
+    # TODO: dir aware file uploads?
+    file_path = knowledgebase_dir / "uploads" /file.filename
     
     try:
         contents = await file.read()

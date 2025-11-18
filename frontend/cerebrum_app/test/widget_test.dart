@@ -6,7 +6,7 @@
 // tree, read text, and verify that the values of widget properties are correct.
 
 import 'package:cerebrum_app/main.dart';
-import 'package:cerebrum_app/ui/desktop/desktop_main.dart';
+// import 'package:cerebrum_app/ui/desktop/desktop_main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

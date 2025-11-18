@@ -66,3 +66,17 @@
 2025-10-27 22:24:56,355 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
 2025-10-27 22:25:07,088 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
 2025-10-27 22:26:31,958 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-11-12 23:05:42,745 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-11-12 23:05:48,676 [INFO] root: Raw translated query: '{\n  "rewritten": "What role does protein play in muscle recovery?",\n  "subqueries": [\n    {\n      "text": "role of proteins in muscle recovery",\n      "domain": [],\n      "subject": []\n    }\n  ],\n  "domain": [""],\n  "subject": [""]\n}'
+2025-11-12 23:05:49,133 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-11-12 23:05:57,251 [INFO] root: Raw translated query: '{\n  "rewritten": "What role does protein have in muscle recovery?",\n  "subqueries": [\n    {\n      "text": "role of proteins",\n      "domain": "",\n      "subject": ""\n    },\n    {\n      "text": "protein\'s impact on muscle recovery",\n      "domain": "",\n      "subject": ""\n    }\n  ],\n  "domain": [],\n  "subject": []\n}'
+2025-11-12 23:05:57,251 [INFO] local_server.routes_chat: Translated wuery dict: rewritten='What role does protein have in muscle recovery?' domain=[] subject=[] subqueries=[Subquery(text='role of proteins', domain='', subject=''), Subquery(text="protein's impact on muscle recovery", domain='', subject='')]
+2025-11-12 23:05:57,251 [WARNING] root: skipping subquery with missing domain/subject
+2025-11-12 23:05:57,251 [WARNING] root: skipping subquery with missing domain/subject
+2025-11-12 23:06:04,389 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-11-12 23:06:50,297 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-11-12 23:06:55,313 [INFO] root: Raw translated query: '{\n  "rewritten": "What is Cugushi?",\n  "subqueries": [\n    {\n      "text": "Cugushi",\n      "domain": [],\n      "subject": []\n    }\n  ],\n  "domain": [],\n  "subject": []\n}'
+2025-11-12 23:11:29,574 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-11-12 23:11:39,274 [INFO] root: Raw translated query: '{\n  "rewritten": "Describe how plants convert sunlight into chemical energy using carbon dioxide and water to produce glucose and oxygen.",\n  "subqueries": [\n    {\n      "text": "Describe how plants convert sunlight into chemical energy",\n      "domain": [],\n      "subject": []\n    },\n    {\n      "text": "Using carbon dioxide and water to produce glucose and oxygen",\n      "domain": [],\n      "subject": []\n    }\n  ],\n  "domain": [""],\n  "subject": [""]\n}'
+2025-11-12 23:12:44,091 [INFO] httpx: HTTP Request: POST http://127.0.0.1:11434/api/generate "HTTP/1.1 200 OK"
+2025-11-12 23:12:49,098 [INFO] root: Raw translated query: '{\n  "rewritten": "Describe DNA.",\n  "subqueries": [\n    {\n      "text": "describe DNA",\n      "domain": [],\n      "subject": []\n    }\n  ],\n  "domain": [""],\n  "subject": [""]\n}'

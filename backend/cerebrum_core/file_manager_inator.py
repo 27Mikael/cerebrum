@@ -2,6 +2,42 @@ import re
 import hashlib
 import sqlite3
 from pathlib import Path
+from platformdirs import PlatformDirs
+
+# init dirs for server
+class CerebrumPaths():
+    def __init__(self, app_name: str = "cerebrum"):
+        dirs = PlatformDirs(app_name)
+        self.DATA_DIR = Path(dirs.user_data_dir)
+        self.CONFIG_DIR = Path(dirs.user_config_dir)
+
+    def init_cerebrum_dirs(self):
+        self.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        self.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+        for sub in ["knowledgebase", "projects", "study_bubbles" , "logs"]:
+            (self.DATA_DIR / sub).mkdir(exist_ok=True)
+
+    def get_kb_dir(self):
+        KB_DIR = self.DATA_DIR / "knowledgebase"
+        return KB_DIR
+
+    def get_projects_dir(self):
+        PROJECTS_DIR = self.DATA_DIR / "projects"
+        return PROJECTS_DIR
+    
+    def get_bubbles_dir(self):
+        BUBBLE_DIR = self.DATA_DIR / "study_bubbles"
+        return BUBBLE_DIR
+
+    def get_logs_dir(self):
+        LOGS_DIR = self.DATA_DIR / "logs" 
+        return LOGS_DIR
+
+# init so functions in this file can use it
+path = CerebrumPaths()
+
+
 
 def file_walker_inator(root: Path, max_depth: int = 4):
     """
@@ -57,11 +93,9 @@ def knowledgebase_index_inator(root: Path):
     }, available_files
 
 
-
-
 class FileRegisterInator():
-    def __init__(self, db_path: str = "../local_server/db/registry.db"):
-        self.DB_PATH = Path(db_path).resolve()
+    def __init__(self, db_path: str = "registry/registry.db"):
+        self.DB_PATH = path.get_kb_dir() / db_path
         self.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         self._table_iniatior_inator()
 

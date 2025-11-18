@@ -1,15 +1,23 @@
 import 'package:flutter/material.dart';
 
-class MobileStudyBubblePage extends StatefulWidget {
-  const MobileStudyBubblePage({super.key});
+class MStudyBubblePage extends StatefulWidget {
+  final bool addMode;
+
+  const MStudyBubblePage({super.key, this.addMode = false});
 
   @override
-  State<MobileStudyBubblePage> createState() => _MobileStudyBubblePageState();
+  State<MStudyBubblePage> createState() => _MStudyBubblePageState();
 }
 
-class _MobileStudyBubblePageState extends State<MobileStudyBubblePage> {
+class _MStudyBubblePageState extends State<MStudyBubblePage> {
   @override
   Widget build(BuildContext context) {
+    if (widget.addMode) {
+      return (Scaffold(
+        appBar: AppBar(title: const Text("Create Study Bubble")),
+        body: const Center(child: Text("Project Creation UI here")),
+      ));
+    }
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(

@@ -11,6 +11,7 @@ from langchain_text_splitters import  MarkdownHeaderTextSplitter
 
 from agents.rose import RosePrompts
 from cerebrum_core.model_inator import FileMetadata
+from cerebrum_core.file_manager_inator import CerebrumPaths
 
 
 
@@ -64,7 +65,8 @@ class IngestInator:
 
         # add yaml front matter to the documents
   
-        markdown_dir = Path("../data/storage/markdown") / domain / subject
+        path = CerebrumPaths()
+        markdown_dir = path.get_kb_dir() / "markdown" / domain / subject
         markdown_dir.mkdir(parents=True, exist_ok=True)
 
         md_body = pymupdf4llm.to_markdown(self.filepath, show_progress=True)

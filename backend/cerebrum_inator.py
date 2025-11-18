@@ -3,18 +3,19 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 
-from cerebrum_core.file_manager_inator import FileRegisterInator
-from local_server import routes_chat, routes_notes, routes_process_files
-# %%
-#
+from local_server import routes_projects, routes_process_files, routes_study_bubble
+from cerebrum_core.file_manager_inator import CerebrumPaths, FileRegisterInator
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    cerebrum_paths = CerebrumPaths()
+    cerebrum_paths.init_cerebrum_dirs()
 
     registry = FileRegisterInator()
     app.state.registry = registry
 
-    app.include_router(routes_chat.router)
-    app.include_router(routes_notes.router)
+    app.include_router(routes_projects.project_router)
+    app.include_router(routes_study_bubble.bubble_router)
     app.include_router(routes_process_files.router)
     yield
 
@@ -35,8 +36,12 @@ def create_api_server():
         allow_headers=["*"]
     )
 
+    @app.get("/")
+    def root():
+        return{"message": "Cerebrum API is running"}
+
     # include routers
-#    app.include_router(chat.router)
+    # app.include_router(chat.router)
     return app
 
 app = create_api_server()
@@ -44,4 +49,3 @@ app = create_api_server()
 if __name__ == "__main__":
     # Important so uvicorn doesn't run on import
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
