@@ -13,7 +13,7 @@ from cerebrum_core.file_manager_inator import CerebrumPaths
 from cerebrum_core.model_inator import CreateStudyBubble, NoteOut, NoteBase, StudyBubble
 
 
-bubble_router = APIRouter(prefix="/bubble", tags=["Study Bubble API"])
+bubble_router = APIRouter(prefix="/bubbles", tags=["Study Bubble API"])
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -95,6 +95,9 @@ def create_study_bubble(data: CreateStudyBubble) -> StudyBubble:
         raise HTTPException(status_code=400, detail="Bubble already exists")
 
     bubble_path.mkdir(parents=True, exist_ok=True)
+    (bubble_path / "chat").mkdir(parents=True, exist_ok=True)
+    (bubble_path / "notes").mkdir(parents=True, exist_ok=True)
+    (bubble_path / "quizzes").mkdir(parents=True, exist_ok=True)
 
     bubble_data = StudyBubble(
         id=bubble_id,

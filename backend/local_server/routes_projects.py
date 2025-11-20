@@ -20,7 +20,7 @@ llm_model = "granite4:micro"
 embedding_model = "qwen3-embedding:4b-q4_K_M"
 
 # --------------------------- router & paths --------------------------- #
-project_router = APIRouter(prefix="/project", tags=["Project API"])
+project_router = APIRouter(prefix="/projects", tags=["Project API"])
 
 CEREBRUM_PATHS = CerebrumPaths()
 ROOT_KB_DIR = CEREBRUM_PATHS.get_kb_dir()
@@ -83,7 +83,7 @@ def list_projects():
     return projects
 
 
-@project_router.post("/create")
+@project_router.post("/create", response_model=ResearchProject)
 def create_project(data: CreateResearchProject) -> ResearchProject:
     """
     Create a new project folder with an info file.
@@ -96,6 +96,9 @@ def create_project(data: CreateResearchProject) -> ResearchProject:
         raise HTTPException(status_code=400, detail="Project already exists")
 
     project_path.mkdir(parents=True, exist_ok=True)
+    (project_path / "chat").mkdir(parents=True, exist_ok=True)
+    (project_path / "notes").mkdir(parents=True, exist_ok=True)
+    (project_path / "reviews").mkdir(parents=True, exist_ok=True)
 
     project_data = ResearchProject(
         id = project_id,
@@ -143,7 +146,7 @@ def list_notes(project_id: str):
     return list_notes_in(notes_dir)
 
 
-@project_router.post("/{project_id}/create/notes", response_model=NoteOut)
+@project_router.post("/{project_id}/notes/create", response_model=NoteOut)
 def create_note(project_id: str,  note: NoteBase):
     notes_dir = get_notes_dir(project_id, )
 
@@ -172,7 +175,7 @@ def get_note(project_id: str,  filename: str):
     return NoteOut(title=title, content=content, filename=filename)
 
 
-@project_router.put("{project_id}/notes/update/{filename}", response_model=NoteOut)
+@project_router.put("/{project_id}/notes/update/{filename}", response_model=NoteOut)
 def update_note(project_id: str,  filename: str, note: NoteBase):
     notes_dir = get_notes_dir(project_id, )
     file_path = notes_dir / filename

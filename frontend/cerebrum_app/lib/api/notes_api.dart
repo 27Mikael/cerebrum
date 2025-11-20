@@ -3,7 +3,7 @@ import 'package:http/http.dart' as http;
 
 class NotesApi {
   static const baseUrl = "http://localhost:8000";
-  static const String notesEndpoint = "$baseUrl/notes";
+  static const String notesEndpoint = "$baseUrl/{projects_id}/notes";
 
   // list all notes
   static Future<List<dynamic>> fetchNotes() async {

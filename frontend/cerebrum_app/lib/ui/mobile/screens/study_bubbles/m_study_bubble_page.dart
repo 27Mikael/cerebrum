@@ -41,8 +41,8 @@ class _MStudyBubblePageState extends State<MStudyBubblePage> {
           ),
           // bottom content
           DraggableScrollableSheet(
-            initialChildSize: 0.55,
-            minChildSize: 0.55,
+            initialChildSize: 0.65,
+            minChildSize: 0.65,
             maxChildSize: 1,
             builder: (context, scrollController) {
               return Container(

@@ -1,49 +1,96 @@
 import 'package:flutter/material.dart';
+import 'package:cerebrum_app/api/projects_api.dart';
+import 'package:cerebrum_app/ui/mobile/screens/projects/m_projects_page.dart';
 
-class MStudyBubbleHome extends StatefulWidget {
-  const MStudyBubbleHome({super.key});
+class MProjectsHome extends StatefulWidget {
+  const MProjectsHome({super.key});
 
   @override
-  State<MStudyBubbleHome> createState() => _MStudyBubbleHomeState();
+  State<MProjectsHome> createState() => _MProjectsHomeState();
 }
 
-class _MStudyBubbleHomeState extends State<MStudyBubbleHome> {
-  List<Map<String, dynamic>> bubbles = [];
+class _MProjectsHomeState extends State<MProjectsHome> {
+  List<dynamic> projects = [];
 
   @override
   void initState() {
     super.initState();
-    fetchBubbles();
+    fetchProjects();
   }
 
-  Future<void> fetchBubbles() async {
-    // TODO: Replace with your API call
-    await Future.delayed(const Duration(milliseconds: 100));
-    setState(() {
-      bubbles = [
-        {'title': 'Bubble 1', 'description': 'Description 1'},
-        {'title': 'Bubble 2', 'description': 'Description 2'},
-      ];
-    });
+  Future<void> addProject({
+    required String name,
+    required String description,
+  }) async {
+    try {
+      final project = await ProjectsApi.createProject(
+        name: name,
+        description: description,
+        domains: [],
+        userGoals: [],
+      );
+
+      setState(() {
+        projects.insert(0, project);
+      });
+
+      final newProject = Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => MProjectsPage(addMode: true)),
+      );
+      if (newProject != null) {
+        setState(() => projects.insert(0, newProject));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$e")));
+    }
   }
 
-  void addBubble() async {
+  Future<void> fetchProjects() async {
+    try {
+      final data = await ProjectsApi.fetchProjects();
+      setState(() => projects = data);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("$e")));
+    }
+  }
+
+  void addProjectWidget() async {
+    final nameController = TextEditingController();
+    final descriptionController = TextEditingController();
+
     await showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       builder:
-          (_) => SizedBox(
-            height: 150,
+          (_) => Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom,
+              left: 16,
+              right: 16,
+              top: 16,
+            ),
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                ListTile(
-                  leading: const Icon(Icons.add),
-                  title: const Text("Add Study Bubble"),
-                  onTap: () {
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(labelText: 'Project Name'),
+                ),
+                TextField(
+                  controller: descriptionController,
+                  decoration: const InputDecoration(labelText: 'Description'),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: () {
                     Navigator.pop(context);
-                    // TODO: call API to create bubble
-                    fetchBubbles(); // refresh list after creation
+                    addProject(
+                      name: nameController.text,
+                      description: descriptionController.text,
+                    );
                   },
+                  child: const Text("Create Project"),
                 ),
               ],
             ),
@@ -55,18 +102,24 @@ class _MStudyBubbleHomeState extends State<MStudyBubbleHome> {
   Widget build(BuildContext context) {
     return Scaffold(
       floatingActionButton: FloatingActionButton(
-        onPressed: addBubble,
+        onPressed: addProjectWidget,
         child: const Icon(Icons.add),
       ),
       body: ListView.builder(
-        itemCount: bubbles.length,
+        itemCount: projects.length,
         itemBuilder: (context, index) {
-          final bubble = bubbles[index];
+          final project = projects[index];
           return ListTile(
-            title: Text(bubble['title'] ?? 'Untitled'),
-            subtitle: Text(bubble['description'] ?? ''),
+            title: Text(project['title'] ?? 'Untitled'),
+            subtitle: Text(project['description'] ?? ''),
             onTap: () {
-              // Optional: open bubble detail
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder:
+                      (_) => MProjectsPage(addMode: false, project: project),
+                ),
+              );
             },
           );
         },
