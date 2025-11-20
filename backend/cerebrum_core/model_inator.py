@@ -45,13 +45,23 @@ class KnowledgeBase(BaseModel):
         domain = Domain(name=domain_name, description=description) 
         self.domains.append(domain)
         return domain
+#############################################################################
+#                                                                           #
+#                        USER CONFIG MODELS                                 #
+#                                                                           #
+#############################################################################
+
+class User(BaseModel):
+    name: str
+    password: str
+    selected_chat_model: str = ""
+    selected_embedding_model: str = ""
 
 #############################################################################
-#
-#                               QUERY MODELS FOR LLM INTERACTIONS
-#
-############################################################################
-
+#                                                                           #
+#                      MODELS FOR LLM QUERYING                              #
+#                                                                           #
+#############################################################################
 
 class Subquery(BaseModel):
     text: str
@@ -75,11 +85,13 @@ class Chunk(BaseModel):
      pass
 
 
+
 #############################################################################
-#
-#                               MODELS FOR NOTES AND CONTENT SHARING
-#
-############################################################################
+#                                                                           #
+#                    MODELS FOR NOTES AND LEARNING                          #
+#                                                                           #
+#############################################################################
+
 
 class NoteBase(BaseModel):
     title: str
@@ -91,9 +103,9 @@ class NoteOut(NoteBase):
 
 
 #############################################################################
-#
-#                               MODELS FOR INTERACTIVE USER LEARNING
-#
+#                                                                           #
+#                    MODELS FOR INTERACTIVE USER LEARNING                   #
+#                                                                           #
 #############################################################################
 
 class Quiz(BaseModel):
