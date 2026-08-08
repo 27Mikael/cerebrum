@@ -1,20 +1,27 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'api_config.dart';
 
 class BubblesApi {
-  static const baseUrl = "http://localhost:8000";
-  static const bubblesEndpoint = "$baseUrl/bubbles";
+  static String get baseUrl => ApiConfig.baseUrl;
+  static String get bubblesEndpoint => "$baseUrl/bubbles";
 
   // List all bubbles
   static Future<List<dynamic>> fetchBubbles() async {
-    final response = await http.get(Uri.parse("$bubblesEndpoint/"));
+    final response = await http.get(
+      Uri.parse("$bubblesEndpoint/"),
+      headers: await ApiConfig.headers(json: false),
+    );
     if (response.statusCode == 200) return jsonDecode(response.body);
     throw Exception("Failed to fetch bubbles");
   }
 
   // Fetch a bubble
   static Future<Map<String, dynamic>> fetchBubbleById(String bubbleId) async {
-    final response = await http.get(Uri.parse("$bubblesEndpoint/$bubbleId"));
+    final response = await http.get(
+      Uri.parse("$bubblesEndpoint/$bubbleId"),
+      headers: await ApiConfig.headers(json: false),
+    );
     if (response.statusCode == 200) return jsonDecode(response.body);
     throw Exception("Bubble not found");
   }
@@ -35,7 +42,7 @@ class BubblesApi {
 
     final response = await http.post(
       Uri.parse("$bubblesEndpoint/create"),
-      headers: {"Content-Type": "application/json"},
+      headers: await ApiConfig.headers(),
       body: jsonEncode(bubbleData),
     );
 
@@ -47,7 +54,10 @@ class BubblesApi {
 
   // Delete bubble
   static Future<void> deleteBubble(String bubbleId) async {
-    final response = await http.delete(Uri.parse("$bubblesEndpoint/$bubbleId"));
+    final response = await http.delete(
+      Uri.parse("$bubblesEndpoint/$bubbleId"),
+      headers: await ApiConfig.headers(json: false),
+    );
     if (response.statusCode != 200) {
       throw Exception("Failed to delete bubble");
     }
@@ -55,7 +65,7 @@ class BubblesApi {
 }
 
 class BubbleNotesApi {
-  static const baseUrl = "http://localhost:8000";
+  static String get baseUrl => ApiConfig.baseUrl;
 
   static String notesEndpoint(String bubbleId) => "$baseUrl/bubbles/$bubbleId";
 
@@ -63,6 +73,7 @@ class BubbleNotesApi {
   static Future<List<Map<String, dynamic>>> fetchNotes(String bubbleId) async {
     final response = await http.get(
       Uri.parse("${notesEndpoint(bubbleId)}/notes"),
+      headers: await ApiConfig.headers(json: false),
     );
 
     if (response.statusCode == 200) {
@@ -84,6 +95,7 @@ class BubbleNotesApi {
   ) async {
     final response = await http.get(
       Uri.parse("${notesEndpoint(bubbleId)}/notes/get/$filename"),
+      headers: await ApiConfig.headers(json: false),
     );
 
     if (response.statusCode == 200) {
@@ -94,6 +106,24 @@ class BubbleNotesApi {
     }
 
     throw Exception("Note not found: ${response.statusCode}");
+  }
+
+  // Inside your BubbleNotesApi class
+  static Future<Map<String, dynamic>> toggleNoteAnalysis(
+    String bubbleId,
+    String filename,
+  ) async {
+    final response = await http.post(
+      Uri.parse("${notesEndpoint(bubbleId)}/notes/toggle_analysis/$filename"),
+      headers: await ApiConfig.headers(json: false),
+    );
+
+    // Guard Clause: Handle failures immediately
+    if (response.statusCode != 200) {
+      throw Exception("Failed to toggle note analysis: ${response.statusCode}");
+    }
+
+    return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
   // Create note
@@ -107,7 +137,7 @@ class BubbleNotesApi {
 
     final response = await http.post(
       Uri.parse("${notesEndpoint(bubbleId)}/create/notes"),
-      headers: {"Content-Type": "application/json"},
+      headers: await ApiConfig.headers(),
       body: jsonEncode(note),
     );
 
@@ -145,7 +175,7 @@ class BubbleNotesApi {
 
     final response = await http.put(
       Uri.parse("${notesEndpoint(bubbleId)}/notes/update/$filename"),
-      headers: {"Content-Type": "application/json"},
+      headers: await ApiConfig.headers(),
       body: jsonEncode(note),
     );
 
@@ -167,7 +197,7 @@ class BubbleNotesApi {
   ) async {
     final response = await http.put(
       Uri.parse("${notesEndpoint(bubbleId)}/notes/rename/$oldFilename"),
-      headers: {"Content-Type": "application/json"},
+      headers: await ApiConfig.headers(),
       body: jsonEncode({"title": newFilename}),
     );
     if (response.statusCode != 200) {
@@ -179,6 +209,7 @@ class BubbleNotesApi {
   static Future<void> deleteNote(String bubbleId, String filename) async {
     final response = await http.delete(
       Uri.parse("${notesEndpoint(bubbleId)}/notes/delete/$filename"),
+      headers: await ApiConfig.headers(json: false),
     );
 
     if (response.statusCode != 200) {
@@ -188,7 +219,7 @@ class BubbleNotesApi {
 }
 
 class BubbleChatApi {
-  static const baseUrl = "http://localhost:8000";
+  static String get baseUrl => ApiConfig.baseUrl;
 
   /// Helper to build the base project chat endpoint
   static String chatApi(String bubbleId) {
@@ -204,7 +235,7 @@ class BubbleChatApi {
 
     final response = await http.post(
       Uri.parse(chatApi(bubbleId)),
-      headers: {"Content-Type": "application/json"},
+      headers: await ApiConfig.headers(),
       body: jsonEncode(body),
     );
 
@@ -219,7 +250,10 @@ class BubbleChatApi {
 
   /// Retrieve past chat history for a project
   static Future<List<dynamic>> fetchChatHistory(String bubbleId) async {
-    final response = await http.get(Uri.parse("${chatApi(bubbleId)}/history"));
+    final response = await http.get(
+      Uri.parse("${chatApi(bubbleId)}/history"),
+      headers: await ApiConfig.headers(json: false),
+    );
 
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
@@ -230,7 +264,10 @@ class BubbleChatApi {
 
   /// Clear the chat history for a project
   static Future<void> clearChatHistory(String bubbleId) async {
-    final response = await http.delete(Uri.parse("${chatApi(bubbleId)}/clear"));
+    final response = await http.delete(
+      Uri.parse("${chatApi(bubbleId)}/clear"),
+      headers: await ApiConfig.headers(json: false),
+    );
 
     if (response.statusCode != 200 &&
         response.statusCode != 204 &&

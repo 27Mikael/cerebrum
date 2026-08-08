@@ -1,12 +1,16 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'api_config.dart';
 
 class ConfigsApi {
-  static const baseUrl = "http://localhost:8000";
-  static const String configsEndpoint = "$baseUrl/user";
+  static String get baseUrl => ApiConfig.baseUrl;
+  static String get configsEndpoint => "$baseUrl/user";
 
   static Future<Map<String, dynamic>> fetchConfigs() async {
-    final response = await http.get(Uri.parse("$configsEndpoint/config"));
+    final response = await http.get(
+      Uri.parse("$configsEndpoint/config"),
+      headers: await ApiConfig.headers(json: false),
+    );
     if (response.statusCode == 200) {
       final Map<String, dynamic> decoded = jsonDecode(response.body);
       return decoded;
@@ -19,6 +23,7 @@ class ConfigsApi {
   static Future<Map<String, dynamic>> fetchInstalledChatModels() async {
     final resp = await http.get(
       Uri.parse("$configsEndpoint/models/chat/installed"),
+      headers: await ApiConfig.headers(json: false),
     );
     if (resp.statusCode == 200) {
       return jsonDecode(resp.body);
@@ -31,6 +36,7 @@ class ConfigsApi {
   static Future<Map<String, dynamic>> fetchInstalledEmbeddingModels() async {
     final resp = await http.get(
       Uri.parse("$configsEndpoint/models/embedding/installed"),
+      headers: await ApiConfig.headers(json: false),
     );
     if (resp.statusCode == 200) {
       return jsonDecode(resp.body);
@@ -43,7 +49,7 @@ class ConfigsApi {
   static Future<Map<String, dynamic>> updateChatModel(String model) async {
     final response = await http.post(
       Uri.parse("$configsEndpoint/config/models/chat?chat_model=$model"),
-      headers: {"Content-Type": "application/json"},
+      headers: await ApiConfig.headers(),
     );
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
@@ -58,7 +64,7 @@ class ConfigsApi {
       Uri.parse(
         "$configsEndpoint/config/models/embedding?embedding_model=$model",
       ),
-      headers: {"Content-Type": "application/json"},
+      headers: await ApiConfig.headers(),
     );
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
@@ -71,6 +77,7 @@ class ConfigsApi {
   static Future<Map<String, dynamic>> fetchOllamaStatus() async {
     final response = await http.get(
       Uri.parse("$configsEndpoint/ollama/status"),
+      headers: await ApiConfig.headers(json: false),
     );
     if (response.statusCode == 200) {
       final Map<String, dynamic> decoded = jsonDecode(response.body);
@@ -84,6 +91,7 @@ class ConfigsApi {
   static Future<Map<String, dynamic>> fetchOnlineModels() async {
     final response = await http.get(
       Uri.parse("$configsEndpoint/models/online"),
+      headers: await ApiConfig.headers(json: false),
     );
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
@@ -96,7 +104,7 @@ class ConfigsApi {
   static Future<Map<String, dynamic>> downloadModel(String modelName) async {
     final response = await http.post(
       Uri.parse("$configsEndpoint/models/download/$modelName"),
-      headers: {"Content-Type": "application/json"},
+      headers: await ApiConfig.headers(),
     );
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
@@ -111,6 +119,7 @@ class ConfigsApi {
   ) async {
     final response = await http.get(
       Uri.parse("$configsEndpoint/models/$modelName/details"),
+      headers: await ApiConfig.headers(json: false),
     );
     if (response.statusCode == 200) {
       return jsonDecode(response.body);
