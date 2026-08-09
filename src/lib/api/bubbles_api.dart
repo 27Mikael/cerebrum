@@ -69,6 +69,35 @@ class BubbleNotesApi {
 
   static String notesEndpoint(String bubbleId) => "$baseUrl/bubbles/$bubbleId";
 
+  /// Upload an image into a note's own `images/` folder and return an ABSOLUTE
+  /// URL to embed in the editor's image block. The daemon returns a relative
+  /// path; we prepend the current base URL so `Image.network` can load it. The
+  /// note must already exist on the server (it needs a folder to store into).
+  static Future<String> uploadNoteImage({
+    required String bubbleId,
+    required String filename,
+    required List<int> bytes,
+    required String imageFilename,
+  }) async {
+    final uri = Uri.parse("${notesEndpoint(bubbleId)}/notes/$filename/images");
+    final request = http.MultipartRequest('POST', uri);
+    // Multipart body → no JSON content-type; keep the auth headers (daemon key /
+    // bearer / user id).
+    request.headers.addAll(await ApiConfig.headers(json: false));
+    request.files.add(
+      http.MultipartFile.fromBytes('file', bytes, filename: imageFilename),
+    );
+
+    final response = await http.Response.fromStream(await request.send());
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return "$baseUrl${data['url']}";
+    }
+    throw Exception(
+      "Failed to upload image: ${response.statusCode} - ${response.body}",
+    );
+  }
+
   // List all notes
   static Future<List<Map<String, dynamic>>> fetchNotes(String bubbleId) async {
     final response = await http.get(

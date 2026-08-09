@@ -39,6 +39,15 @@ class _EditorScaffoldState extends State<EditorScaffold> {
   late final PagedNoteController _editorController;
   _TextEngine _currentEngine = _TextEngine.appFlowy;
 
+  // Captured ONCE at open from the note map, and used for every request instead
+  // of re-reading widget.note['bubble_id'] each time. The daemon's note response
+  // carries an EMPTY bubble_id (it's a computed field off manifest.bubble_id,
+  // which the note manifest doesn't persist), and `_save` merges that response
+  // back into widget.note — which would otherwise clobber the good bubble_id and
+  // send later saves to `/bubbles//notes/update/...` (404). This stable copy is
+  // immune to that clobber.
+  String? _bubbleId;
+
   // App-session default for which mode a note opens in. Lives only for
   // the lifetime of the app process — flip it from the "More" menu and
   // it applies to the next note you open. If you want it to survive an
@@ -63,6 +72,13 @@ class _EditorScaffoldState extends State<EditorScaffold> {
   _overviewMarkdown; // formatted note_overview, rendered once above the list
   List<Map<String, dynamic>> _analysisChunks =
       []; // flattened + numerically sorted
+
+  /// pageId → (stable block id → the analysis chunks covering it). Built from
+  /// `_analysisChunks` (each chunk carries `pageId` + `blockIds`, the daemon's
+  /// `source_block_ids`). Keyed by stable id, not position, so the mapping
+  /// survives edits/reorders. Drives the inline per-block popover — see
+  /// PageSurface.
+  Map<String, Map<String, List<Map<String, dynamic>>>> _blockAnalysis = {};
   bool _hasAttemptedLoad =
       false; // did we already try loading, vs. just toggling the panel
   bool _isLoadingAnalysis = false;
@@ -85,6 +101,7 @@ class _EditorScaffoldState extends State<EditorScaffold> {
 
     final rawFilename = widget.note['filename'];
     final parsedNoteId = _noteIdFromFilename(rawFilename as String?);
+    _bubbleId = widget.note['bubble_id'] as String?;
     debugPrint(
       '[EditorScaffold] Opening note. filename="$rawFilename" '
       'noteId="$parsedNoteId"',
@@ -121,6 +138,37 @@ class _EditorScaffoldState extends State<EditorScaffold> {
       legacyInk: inkJson,
     );
     _editorController.addListener(_onEditorChanged);
+
+    // Image uploads target this note's folder on the daemon. Reads filename
+    // dynamically (not captured) so it also works after a brand-new note gets
+    // its filename on first save.
+    _editorController.imageUploader = (bytes, name) async {
+      final bubbleId = _bubbleId;
+      final filename = widget.note['filename'] as String?;
+      if (bubbleId == null || bubbleId.isEmpty || filename == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Save the note before adding images.')),
+          );
+        }
+        return null;
+      }
+      try {
+        return await BubbleNotesApi.uploadNoteImage(
+          bubbleId: bubbleId,
+          filename: filename,
+          bytes: bytes,
+          imageFilename: name,
+        );
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Image upload failed: $e')),
+          );
+        }
+        return null;
+      }
+    };
 
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _updateLastSavedState(),
@@ -160,10 +208,17 @@ class _EditorScaffoldState extends State<EditorScaffold> {
   Future<void> _save() async {
     if (_isSaving || !_hasUnsavedChanges()) return;
 
+    final bubbleId = _bubbleId;
+    if (bubbleId == null || bubbleId.isEmpty) {
+      // Without a bubble id the URL is `/bubbles//notes/update/...` (404). Don't
+      // hammer the daemon every autosave tick — bail quietly.
+      debugPrint('[EditorScaffold] skipping save: missing bubble_id');
+      return;
+    }
+
     setState(() => _isSaving = true);
 
     try {
-      final bubbleId = widget.note['bubble_id'] as String;
       final filename = widget.note['filename'] as String?;
 
       // Existing note → PUT the whole page set to /update, which reconciles per
@@ -190,6 +245,9 @@ class _EditorScaffoldState extends State<EditorScaffold> {
               );
 
       widget.note.addAll(updated);
+      // The daemon echoes an empty bubble_id — keep the real one in the map so
+      // anything still reading widget.note (and our own re-reads) stays valid.
+      widget.note['bubble_id'] = bubbleId;
       _updateLastSavedState();
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -197,7 +255,7 @@ class _EditorScaffoldState extends State<EditorScaffold> {
   }
 
   Future<void> _toggleAnalysis(bool newValue) async {
-    final bubbleId = widget.note['bubble_id'] as String?;
+    final bubbleId = _bubbleId;
     final filename = widget.note['filename'] as String?;
 
     if (bubbleId == null || filename == null) {
@@ -247,7 +305,7 @@ class _EditorScaffoldState extends State<EditorScaffold> {
   }
 
   Future<void> _loadAnalysis() async {
-    final bubbleId = widget.note['bubble_id'] as String?;
+    final bubbleId = _bubbleId;
     final noteId = _noteIdFromFilename(widget.note['filename'] as String?);
     final version = widget.note["version"];
 
@@ -270,11 +328,13 @@ class _EditorScaffoldState extends State<EditorScaffold> {
           _analysisChunks = _flattenAndSortChunks(
             full['chunk_diagnostics'] as List<dynamic>? ?? [],
           );
+          _rebuildBlockAnalysis();
           _cachedAnalysis = null;
         } else {
           _analysisData = null;
           _overviewMarkdown = null;
           _analysisChunks = [];
+          _blockAnalysis = {};
           _cachedAnalysis = 'No cached analysis found for this note.';
         }
         _showAnalysisPanel = true;
@@ -286,6 +346,7 @@ class _EditorScaffoldState extends State<EditorScaffold> {
         _analysisData = null;
         _overviewMarkdown = null;
         _analysisChunks = [];
+        _blockAnalysis = {};
         _cachedAnalysis = 'Error loading analysis:\n$e';
         _showAnalysisPanel = true;
         _isLoadingAnalysis = false;
@@ -393,11 +454,23 @@ class _EditorScaffoldState extends State<EditorScaffold> {
         final match = RegExp(r'(\d+)').firstMatch(chunkId);
         final chunkIndex = match != null ? int.parse(match.group(1)!) : 1 << 30;
 
+        // Block linkage (added daemon-side): which page + which blocks this
+        // chunk's analysis covers. `source_block_ids` are STABLE block ids
+        // (AppFlowy node ids, or content-hash ids for id-less blocks) — keep
+        // them as-is; they key the per-block popover directly.
+        final pageId = outerMap['page_id'] as String?;
+        final blockIds = (outerMap['source_block_ids'] as List<dynamic>? ?? [])
+            .map((e) => e.toString())
+            .where((s) => s.isNotEmpty)
+            .toList();
+
         flattened.add({
           'chunkId': chunkId,
           'chunkIndex': chunkIndex,
           'excerpt': d['chunk_excerpt'] as String?,
           'findings': d['findings'] as List<dynamic>? ?? [],
+          'pageId': pageId,
+          'blockIds': blockIds,
         });
       }
     }
@@ -408,8 +481,33 @@ class _EditorScaffoldState extends State<EditorScaffold> {
     return flattened;
   }
 
+  /// Analysis chunks covering the block with id [blockId] on page [pageId], or
+  /// null. Passed to PagedEditor as the inline-popover lookup while the panel is
+  /// open.
+  List<Map<String, dynamic>>? _lookupBlockAnalysis(
+    String pageId,
+    String blockId,
+  ) =>
+      _blockAnalysis[pageId]?[blockId];
+
+  /// Rebuild the pageId → blockId → chunks lookup from `_analysisChunks`.
+  void _rebuildBlockAnalysis() {
+    final map = <String, Map<String, List<Map<String, dynamic>>>>{};
+    for (final chunk in _analysisChunks) {
+      final pageId = chunk['pageId'] as String?;
+      if (pageId == null) continue;
+      final blockIds =
+          (chunk['blockIds'] as List?)?.cast<String>() ?? const [];
+      final perPage = map.putIfAbsent(pageId, () => {});
+      for (final blockId in blockIds) {
+        perPage.putIfAbsent(blockId, () => []).add(chunk);
+      }
+    }
+    _blockAnalysis = map;
+  }
+
   Future<void> _generateAnalysis() async {
-    final bubbleId = widget.note['bubble_id'] as String?;
+    final bubbleId = _bubbleId;
     final filename = widget.note['filename'] as String?;
 
     if (bubbleId == null || filename == null) {
@@ -439,6 +537,7 @@ class _EditorScaffoldState extends State<EditorScaffold> {
         _analysisData = null;
         _overviewMarkdown = null;
         _analysisChunks = [];
+        _blockAnalysis = {};
         _cachedAnalysis =
             analysis ?? 'Analysis generated but no content returned.';
         _hasAttemptedLoad = true;
@@ -459,6 +558,7 @@ class _EditorScaffoldState extends State<EditorScaffold> {
         _analysisData = null;
         _overviewMarkdown = null;
         _analysisChunks = [];
+        _blockAnalysis = {};
         _cachedAnalysis = 'Error generating analysis:\n$e';
         _hasAttemptedLoad = true;
         _showAnalysisPanel = true;
@@ -623,16 +723,6 @@ class _EditorScaffoldState extends State<EditorScaffold> {
             },
           ),
 
-          // Manual continuous-pagination trigger. Reflow also fires live while
-          // typing (debounced — see PagedNoteController._scheduleReflow); this
-          // button stays as an on-demand escape hatch and for tuning the
-          // paginator. Reflows text so no page exceeds the line budget, keeping
-          // the caret where you were typing.
-          IconButton(
-            icon: const Icon(Icons.auto_stories),
-            tooltip: 'Reflow pages',
-            onPressed: () => _editorController.repaginate(),
-          ),
 
           // Secondary, settings-style actions that don't need to be
           // permanently visible: whether analysis runs for this note at
@@ -727,7 +817,16 @@ class _EditorScaffoldState extends State<EditorScaffold> {
       body: SafeArea(
         child: Stack(
           children: [
-            Positioned.fill(child: PagedEditor(controller: _editorController)),
+            Positioned.fill(
+              child: PagedEditor(
+                controller: _editorController,
+                // While the analysis panel is open, tapping a block that has
+                // analysis shows its findings inline (see PageSurface). Null
+                // when closed → no popovers during normal editing.
+                analysisForBlock:
+                    _showAnalysisPanel ? _lookupBlockAnalysis : null,
+              ),
+            ),
 
             // Single screen-level drawing dial (was previously embedded once
             // per page). Shown only in drawing mode and pointed at the ACTIVE

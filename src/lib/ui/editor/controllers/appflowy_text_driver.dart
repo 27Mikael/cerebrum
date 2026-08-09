@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart' show Icons;
 import 'package:flutter/widgets.dart';
 import 'package:appflowy_editor/appflowy_editor.dart';
@@ -71,6 +72,13 @@ class AppFlowyTextDriver extends ChangeNotifier
   /// backspace is suppressed), false to let the default backspace run (e.g. this
   /// is already the first page). Null when the note isn't paged.
   bool Function()? onBackspaceAtStart;
+
+  /// Uploads the picked image [bytes] (original [filename]) and returns the URL
+  /// to embed, or null on failure/cancel. Set by [PagedNoteController] from the
+  /// note context (it knows the bubble + note). Null until wired — the "Image"
+  /// slash item is a no-op without it (e.g. an unsaved note has nowhere to
+  /// store to yet).
+  Future<String?> Function(List<int> bytes, String filename)? imageUploader;
 
   /// The current collapsed caret as `(path, offset)`, or null when there's no
   /// selection or it's a range. `path` is the block path (length 1 for a
@@ -178,7 +186,63 @@ class AppFlowyTextDriver extends ChangeNotifier
     _headingMenuItem(5),
     _headingMenuItem(6),
     _codeBlockMenuItem(),
+    _imageMenuItem(),
   ];
+
+  /// "/image" → pick an image file, upload it via [imageUploader], and drop an
+  /// image block where the caret is. Instance (not static) because it reaches
+  /// [imageUploader]. No-op if the uploader isn't wired (unsaved note) or the
+  /// pick is cancelled.
+  SelectionMenuItem _imageMenuItem() {
+    return SelectionMenuItem(
+      getName: () => 'Image',
+      icon: (editorState, isSelected, style) => SelectionMenuIconWidget(
+        icon: Icons.image,
+        isSelected: isSelected,
+        style: style,
+      ),
+      keywords: ['image', 'img', 'picture', 'photo'],
+      handler: (editorState, menuService, context) {
+        // Fire-and-forget: the picker + upload are async, but the slash menu
+        // handler is sync. The selection path is captured up front so the insert
+        // lands where "/image" was even after the await.
+        _pickUploadInsertImage(editorState);
+      },
+    );
+  }
+
+  Future<void> _pickUploadInsertImage(EditorState editorState) async {
+    final uploader = imageUploader;
+    final selection = editorState.selection;
+    if (uploader == null || selection == null) return;
+    final path = selection.start.path;
+
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      withData: true, // need the bytes (works on desktop + web)
+    );
+    final file = picked?.files.firstOrNull;
+    final bytes = file?.bytes;
+    if (bytes == null) return;
+
+    final url = await uploader(bytes, file!.name);
+    if (url == null) return;
+
+    // Replace the (now-"/image") node with the image block, or if that node has
+    // real text, insert the image right after it.
+    final node = editorState.getNodeAtPath(path);
+    if (node == null) return;
+    final transaction = editorState.transaction;
+    final hasText = (node.delta?.toPlainText().trim().isNotEmpty) ?? false;
+    if (hasText) {
+      transaction.insertNode(path.next, imageNode(url: url));
+    } else {
+      transaction
+        ..insertNode(path, imageNode(url: url))
+        ..deleteNode(node);
+    }
+    await editorState.apply(transaction);
+  }
 
   late final List<CharacterShortcutEvent> _characterShortcutEvents = [
     ...VimCharacterShortcuts.getCharacterShortcuts(vimMode),
@@ -263,9 +327,51 @@ class AppFlowyTextDriver extends ChangeNotifier
   /// much reason to reach for this outside of this file/tests).
   EditorState get editorState => _editorState;
 
+  /// Fires whenever the selection changes (caret move, tap, range). Used by the
+  /// analysis popover to react to which block the caret is in. This is the raw
+  /// AppFlowy selection notifier, so listeners fire on every caret move.
+  Listenable get selectionChanges => _editorState.selectionNotifier;
+
+  /// The index of the TOP-LEVEL block the collapsed caret sits in, or null when
+  /// there's no caret / it's a range / it's nested (e.g. inside a table cell).
+  /// Used only for on-screen positioning (rectOfBlock); analysis is keyed by the
+  /// stable [selectedBlockId], not this position.
+  int? get selectedBlockIndex {
+    final sel = _editorState.selection;
+    if (sel == null || !sel.isCollapsed) return null;
+    final path = sel.start.path;
+    return path.length == 1 ? path.first : null;
+  }
+
+  /// The STABLE id of the top-level block the collapsed caret sits in, or null
+  /// (same guards as [selectedBlockIndex]). This is the durable identity the
+  /// daemon keys analysis to — it round-trips via documentJson, so tapping a
+  /// block maps to its findings even after blocks above it are added/reordered.
+  String? get selectedBlockId {
+    final sel = _editorState.selection;
+    if (sel == null || !sel.isCollapsed) return null;
+    final path = sel.start.path;
+    if (path.length != 1) return null;
+    return _editorState.getNodeAtPath([path.first])?.id;
+  }
+
+  /// The on-screen (global) rect of top-level block [index], or null if it isn't
+  /// currently laid out. Used to anchor the analysis popover to the block.
+  Rect? rectOfBlock(int index) {
+    final node = _editorState.getNodeAtPath([index]);
+    if (node == null || node.renderBox == null) return null;
+    return node.rect;
+  }
+
   @override
   Map<String, dynamic> get documentJson =>
-      _editorState.document.toJson()['document'] as Map<String, dynamic>;
+      // AppFlowy's Node.toJson() drops the node id (and Node.fromJson ignores
+      // it), so a plain toJson() gives blocks NO stable identity — the daemon
+      // then falls back to fragile positional ids for tap-a-block analysis.
+      // Emit each node's id here and restore it on load (see _restoreNodeIds)
+      // so a block keeps ONE identity across edits/reloads/sync — the same
+      // contract ink strokes already have via their stroke id.
+      _nodeToJsonWithId(_editorState.document.root);
 
   @override
   Widget buildEditor(BuildContext context) {
@@ -376,9 +482,54 @@ class AppFlowyTextDriver extends ChangeNotifier
   // each branch avoids that restriction entirely.
   static EditorState _constructEditorState(Map<String, dynamic> docJson) {
     try {
-      return EditorState(document: Document.fromJson({'document': docJson}));
+      final state =
+          EditorState(document: Document.fromJson({'document': docJson}));
+      // Document.fromJson mints fresh nanoids and discards any persisted `id`,
+      // so restore the stored ids onto the freshly-built node tree. Without
+      // this, the id would change on every load and tap-a-block mapping would
+      // never be durable.
+      final children = docJson['children'];
+      if (children is List) {
+        _restoreNodeIds(children, state.document.root.children);
+      }
+      return state;
     } catch (_) {
       return EditorState.blank();
+    }
+  }
+
+  /// Serialise a node (recursively) INCLUDING its `id`. Mirrors AppFlowy's
+  /// Node.toJson() shape (`type` / `data` / `children`) and adds `id` at every
+  /// level so block identity round-trips to the daemon.
+  static Map<String, dynamic> _nodeToJsonWithId(Node node) {
+    final map = Map<String, dynamic>.from(node.toJson());
+    map['id'] = node.id;
+    final kids = node.children;
+    if (kids.isNotEmpty) {
+      map['children'] = kids.map(_nodeToJsonWithId).toList(growable: false);
+    }
+    return map;
+  }
+
+  /// Walk the raw JSON tree and the freshly-parsed node tree in parallel,
+  /// copying each persisted `id` back onto its node (Node.id is mutable). The
+  /// two trees are structurally identical because the nodes were just built
+  /// from this same JSON, so positional pairing is exact.
+  static void _restoreNodeIds(List<dynamic> jsonNodes, List<Node> nodes) {
+    final count = jsonNodes.length < nodes.length
+        ? jsonNodes.length
+        : nodes.length;
+    for (var i = 0; i < count; i++) {
+      final j = jsonNodes[i];
+      if (j is! Map) continue;
+      final id = j['id'];
+      if (id is String && id.isNotEmpty) {
+        nodes[i].id = id;
+      }
+      final childJson = j['children'];
+      if (childJson is List) {
+        _restoreNodeIds(childJson, nodes[i].children);
+      }
     }
   }
 

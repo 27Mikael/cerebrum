@@ -2,6 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:cerebrum_app/ui/editor/controllers/paged_note_controller.dart';
 import 'package:cerebrum_app/ui/editor/screens/page_surface.dart';
 
+/// Looks up the analysis chunks (if any) covering the block with id [blockId] on
+/// the page with id [pageId]. Null/empty means that block has no analysis.
+/// Supplied by EditorScaffold while the analysis panel is open; drives
+/// PageSurface's inline per-block analysis popover. Keyed by STABLE block id
+/// (not position) so the mapping survives edits/reorders.
+typedef BlockAnalysisLookup = List<Map<String, dynamic>>? Function(
+  String pageId,
+  String blockId,
+);
+
 /// Renders a note's pages as either a **vertical** continuous scroll (default,
 /// document feel) or a **horizontal** PageView (slideshow), switchable at
 /// runtime via [PagedNoteController.layout]. Both iterate the same [PageSurface],
@@ -10,9 +20,17 @@ import 'package:cerebrum_app/ui/editor/screens/page_surface.dart';
 ///
 /// UNVERIFIED (no flutter tooling here) — run `flutter analyze`.
 class PagedEditor extends StatefulWidget {
-  const PagedEditor({super.key, required this.controller});
+  const PagedEditor({
+    super.key,
+    required this.controller,
+    this.analysisForBlock,
+  });
 
   final PagedNoteController controller;
+
+  /// When non-null, each page shows an inline analysis popover for blocks this
+  /// resolves to findings for (analysis-review mode). Null → no popovers.
+  final BlockAnalysisLookup? analysisForBlock;
 
   @override
   State<PagedEditor> createState() => _PagedEditorState();
@@ -61,6 +79,11 @@ class _PagedEditorState extends State<PagedEditor> {
                 controller: pages[i].controller,
                 drawingEnabled: c.drawingEnabled,
                 pageNumber: i + 1,
+                pageId: pages[i].pageId,
+                analysisForBlock: widget.analysisForBlock,
+                // When this page's content spills past the sheet, move the
+                // overflowing tail (from block `fromIndex`) onto the next page.
+                onOverflow: (fromIndex) => c.pushOverflow(i, fromIndex),
               ),
             ),
           );

@@ -1,12 +1,7 @@
-import 'dart:async';
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
 import 'package:scribble/scribble.dart';
 import 'package:cerebrum_app/ui/editor/controllers/appflowy_text_driver.dart';
 import 'package:cerebrum_app/ui/editor/controllers/note_editor_controller.dart';
-import 'package:cerebrum_app/ui/editor/controllers/page_paginator.dart'
-    as paginator;
 
 /// Vertical continuous scroll (default, document feel) vs horizontal PageView
 /// (slideshow). Both render the same page widget — see PagedEditor.
@@ -39,20 +34,6 @@ class PagedNoteController extends ChangeNotifier {
     }
   }
 
-  /// Debounce timer for the live reflow trigger — coalesces a burst of edits
-  /// into a single repagination once typing settles (see [_scheduleReflow]).
-  Timer? _reflowTimer;
-
-  /// True while [repaginate] is tearing down / rebuilding page controllers, so
-  /// the edit notifications that rebuild fires don't schedule another reflow
-  /// (which would thrash / recurse).
-  bool _suppressReflow = false;
-
-  /// How long typing must settle before a live reflow fires. Long enough that
-  /// it lands in a pause rather than between two keystrokes; short enough that
-  /// a page visibly reflows "as you type," not on some distant delay.
-  static const Duration _reflowDebounce = Duration(milliseconds: 450);
-
   /// The drawing tool (pen colour+width / highlighter / eraser) currently
   /// selected on the single screen-level dial, expressed as a mutation applied
   /// to a page's ink notifier. Null until the user first picks a tool. Stored so
@@ -71,30 +52,34 @@ class PagedNoteController extends ChangeNotifier {
     }
   }
 
+  /// Uploads a picked image and returns the URL to embed. Set by the note
+  /// context (EditorScaffold, which knows the bubble + note). Stored so it can
+  /// be applied to every page's driver — including pages created later — so the
+  /// "/image" slash item works on any page.
+  Future<String?> Function(List<int> bytes, String filename)? _imageUploader;
+
+  set imageUploader(
+    Future<String?> Function(List<int> bytes, String filename)? uploader,
+  ) {
+    _imageUploader = uploader;
+    for (final p in _pages) {
+      final driver = p.controller.driver;
+      if (driver is AppFlowyTextDriver) driver.imageUploader = uploader;
+    }
+  }
+
   /// Wire everything a freshly created page needs: the backspace-at-start merge
   /// and the live-reflow edit trigger. Reused pages (kept as-is across a reflow)
   /// are NOT passed through here — their wiring already stands, and re-adding
   /// the reflow listener would fire it twice per edit.
   void _initPage(NotePage page) {
     _wireMerge(page);
-    // Any edit on any page schedules a (debounced, no-op-unless-structure-
-    // changes) reflow. Editing happens on the focused page, but listening to
-    // all of them keeps this correct regardless of which page has focus.
-    page.controller.addListener(_scheduleReflow);
     // A page created after a tool was picked inherits it, so the pen/highlighter
-    // /eraser stays consistent on brand-new and reflow-rebuilt pages alike.
+    // /eraser stays consistent on brand-new pages.
     _activeTool?.call(page.controller.drawingNotifier);
-  }
-
-  /// Schedule a debounced live repagination. Cheap when nothing overflowed:
-  /// [repaginate] bails via `_samePageBlocks` without rebuilding anything.
-  void _scheduleReflow() {
-    if (_suppressReflow) return;
-    _reflowTimer?.cancel();
-    _reflowTimer = Timer(_reflowDebounce, () {
-      _reflowTimer = null;
-      repaginate();
-    });
+    // New pages get the image uploader too, so "/image" works on any page.
+    final driver = page.controller.driver;
+    if (driver is AppFlowyTextDriver) driver.imageUploader = _imageUploader;
   }
 
   /// Wire a page's backspace-at-start to merge it into the previous page. The
@@ -204,9 +189,9 @@ class PagedNoteController extends ChangeNotifier {
             : PageLayoutMode.vertical,
       );
 
-  void addPage() {
-    // Simple sequential ids (p1, p2, …). Use max-existing+1 so a delete then
-    // add can't collide with a surviving page's id.
+  /// Next free `p{n}` id: max existing + 1, so a delete-then-add can't collide
+  /// with a surviving page's id.
+  String _nextPageId() {
     var maxNum = 0;
     for (final p in _pages) {
       final m = RegExp(r'^p(\d+)$').firstMatch(p.pageId);
@@ -215,9 +200,13 @@ class PagedNoteController extends ChangeNotifier {
         if (n > maxNum) maxNum = n;
       }
     }
+    return 'p${maxNum + 1}';
+  }
+
+  void addPage() {
     final idx = _pages.length;
     final page = _makePage(
-      pageId: 'p${maxNum + 1}',
+      pageId: _nextPageId(),
       index: idx,
       document: null,
       ink: null,
@@ -232,6 +221,108 @@ class PagedNoteController extends ChangeNotifier {
     if (_pages.length <= 1 || index < 0 || index >= _pages.length) return;
     _pages.removeAt(index).controller.dispose();
     if (_activeIndex >= _pages.length) _activeIndex = _pages.length - 1;
+    notifyListeners();
+  }
+
+  /// True while [pushOverflow] is rebuilding pages, so an overflow report that
+  /// arrives mid-rebuild is ignored rather than recursing.
+  bool _flowing = false;
+
+  /// Forward-only overflow flow: the blocks from [fromBlockIndex] onward on page
+  /// [pageIndex] no longer fit the sheet, so move them to the FRONT of the next
+  /// page (creating one if this is the last page) and carry the caret with them
+  /// so typing continues there. Whole blocks move (never split), so the caret's
+  /// (block, offset) maps directly — the moved block's new index is simply
+  /// `oldIndex - fromBlockIndex`.
+  ///
+  /// Existing pages are NOT reflowed; content only ever moves DOWN, so this
+  /// terminates and never churns page ids upward the way the old continuous
+  /// pagination did. Reported by PageSurface, which measures the actual rendered
+  /// block positions against the sheet.
+  void pushOverflow(int pageIndex, int fromBlockIndex) {
+    if (_flowing || pageIndex < 0 || pageIndex >= _pages.length) return;
+    final page = _pages[pageIndex];
+    final children = List<Map<String, dynamic>>.from(
+      (page.controller.documentJson['children'] as List?) ?? const [],
+    );
+    // Keep at least one block on this page (fromBlockIndex >= 1); a single block
+    // taller than a whole sheet can't be helped without splitting, so leave it.
+    //
+    // TODO(tables): follow-up — a TABLE taller than a whole sheet therefore
+    // overflows its own page (we only ever move whole blocks; nothing splits).
+    // Options when we want to handle it: (a) reinstate the verified row-splitter
+    // (`_splitTable` in the deleted page_paginator.dart — see git history) as a
+    // targeted case here, splitting only an oversized table across the boundary;
+    // or (b) shrink / internally scroll a too-tall table within its sheet. Until
+    // then, oversized tables are left whole and overflow.
+    if (fromBlockIndex < 1 || fromBlockIndex >= children.length) return;
+
+    _flowing = true;
+
+    final kept = children.sublist(0, fromBlockIndex);
+    final moved = children.sublist(fromBlockIndex);
+
+    // If the caret is on this page in a moved block, it travels to the next page.
+    int? caretBlock;
+    int? caretOffset;
+    final driver = page.controller.driver;
+    if (_activeIndex == pageIndex && driver is AppFlowyTextDriver) {
+      final caret = driver.caret;
+      if (caret != null &&
+          caret.path.length == 1 &&
+          caret.path.first >= fromBlockIndex) {
+        caretBlock = caret.path.first - fromBlockIndex; // index within `moved`
+        caretOffset = caret.offset;
+      }
+    }
+
+    // Rebuild this page with just the kept blocks (its ink stays).
+    final trimmed = _makePage(
+      pageId: page.pageId,
+      index: pageIndex,
+      document: {'type': 'page', 'children': kept},
+      ink: page.controller.inkJson,
+    );
+    page.controller.dispose();
+    _pages[pageIndex] = trimmed;
+    _initPage(trimmed);
+
+    if (pageIndex + 1 < _pages.length) {
+      // Prepend the moved blocks to the existing next page (may cascade — that
+      // page will report its own overflow next frame if it now doesn't fit).
+      final next = _pages[pageIndex + 1];
+      final nextChildren = List<Map<String, dynamic>>.from(
+        (next.controller.documentJson['children'] as List?) ?? const [],
+      );
+      final rebuiltNext = _makePage(
+        pageId: next.pageId,
+        index: pageIndex + 1,
+        document: {'type': 'page', 'children': [...moved, ...nextChildren]},
+        ink: next.controller.inkJson,
+        caretBlockIndex: caretBlock,
+        caretOffset: caretOffset,
+        autoFocus: caretBlock != null,
+      );
+      next.controller.dispose();
+      _pages[pageIndex + 1] = rebuiltNext;
+      _initPage(rebuiltNext);
+    } else {
+      // Last page overflowed → spill onto a fresh page.
+      final created = _makePage(
+        pageId: _nextPageId(),
+        index: pageIndex + 1,
+        document: {'type': 'page', 'children': moved},
+        ink: null,
+        caretBlockIndex: caretBlock,
+        caretOffset: caretOffset,
+        autoFocus: caretBlock != null,
+      );
+      _pages.add(created);
+      _initPage(created);
+    }
+
+    if (caretBlock != null) _activeIndex = pageIndex + 1;
+    _flowing = false;
     notifyListeners();
   }
 
@@ -302,168 +393,6 @@ class PagedNoteController extends ChangeNotifier {
 
     _activeIndex = index - 1;
     notifyListeners();
-
-    // A merge just concatenates the pulled-up content onto the previous page
-    // WITHOUT respecting the line budget — so if that page now overflows (most
-    // visibly when a whole table is pulled up), its fixed-height sheet would go
-    // scrollable. Reflow to push the overflow back onto following pages (an
-    // atomic too-tall table lands on its own page). No-ops when it already fits,
-    // and preserves the caret just seeded at the seam.
-    repaginate();
-  }
-
-  /// Continuous pagination: reflow every page's text so no page exceeds the
-  /// line budget, splitting blocks that span a boundary (see page_paginator).
-  /// Rebuilds only when the block distribution actually changes, and only the
-  /// pages that changed — an untouched prefix of pages is kept as-is, so their
-  /// live editor state (caret, undo, scroll) survives.
-  ///
-  /// Caret hand-off: before reflowing, the active page's caret is snapshotted as
-  /// a GLOBAL character offset over the flattened block stream — an anchor that
-  /// survives splitting because [paginator.paginate] conserves that text exactly.
-  /// After reflow it's mapped back to whichever (page, block, offset) now holds
-  /// that character, and re-seeded there with focus. If the caret can't be
-  /// resolved (no selection, or it's inside a table cell), the reflow still runs;
-  /// only the caret restore is skipped.
-  ///
-  /// Ink is page-LOCAL and stays with its page INDEX (page 0 keeps page 0's
-  /// strokes, etc.); pages added by the reflow get empty ink.
-  ///
-  /// Fires both from the Reflow button and, debounced, live while typing (see
-  /// [_scheduleReflow]). Reentrancy while it rebuilds controllers is guarded by
-  /// [_suppressReflow].
-  void repaginate({int budget = paginator.kLineBudget, bool preserveCaret = true}) {
-    if (_suppressReflow) return;
-    final current = <List<paginator.Block>>[
-      for (final p in _pages)
-        List<paginator.Block>.from(
-          (p.controller.documentJson['children'] as List?) ?? const [],
-        ),
-    ];
-    final paged = paginator.paginate(current, budget: budget);
-    if (_samePageBlocks(current, paged)) return; // no structural change
-
-    // Snapshot the caret (against the pre-reflow layout) and find where that
-    // same character lands in the post-reflow layout.
-    final globalCaret =
-        preserveCaret ? _captureGlobalCaret(current) : null;
-    final target =
-        globalCaret == null ? null : _locateCaret(paged, globalCaret);
-
-    final oldInk = [for (final p in _pages) p.controller.inkJson];
-    final oldIds = [for (final p in _pages) p.pageId];
-    var nextIdNum = _maxPageIdNum() + 1;
-
-    _suppressReflow = true;
-    final rebuilt = <NotePage>[];
-    final kept = <NotePage>{};
-    for (var i = 0; i < paged.length; i++) {
-      // Reuse an existing page verbatim when its blocks are byte-identical at
-      // the same index (the unchanged prefix before the overflow point). The
-      // caret page is only rebuilt when its content actually changed — if it's
-      // reused, the live caret is already right where it should be.
-      final reusable = i < _pages.length &&
-          jsonEncode(current[i]) == jsonEncode(paged[i]);
-      if (reusable) {
-        kept.add(_pages[i]);
-        rebuilt.add(_pages[i]);
-        continue;
-      }
-      final onCaretPage = target != null && target.pageIndex == i;
-      rebuilt.add(_makePage(
-        pageId: i < oldIds.length ? oldIds[i] : 'p${nextIdNum++}',
-        index: i,
-        document: {'type': 'page', 'children': paged[i]},
-        ink: i < oldInk.length ? oldInk[i] : null, // ink stays by page index
-        caretBlockIndex: onCaretPage ? target.blockIndex : null,
-        caretOffset: onCaretPage ? target.offset : null,
-        autoFocus: onCaretPage,
-      ));
-    }
-
-    // Dispose only the pages we're actually replacing; kept pages carry on.
-    for (final p in _pages) {
-      if (!kept.contains(p)) p.controller.dispose();
-    }
-    _pages
-      ..clear()
-      ..addAll(rebuilt);
-    // Wire only the freshly created pages; kept pages are already wired (and
-    // re-wiring would double their reflow listener).
-    for (final p in _pages) {
-      if (!kept.contains(p)) _initPage(p);
-    }
-    _activeIndex = target?.pageIndex ??
-        (_activeIndex >= _pages.length ? _pages.length - 1 : _activeIndex);
-    _suppressReflow = false;
-    notifyListeners();
-  }
-
-  /// The active page's caret as a global character offset over the flattened
-  /// block stream of [pages] (the pre-reflow per-page block lists). Returns null
-  /// if there's no collapsed caret or it's nested (e.g. inside a table cell),
-  /// in which case the caller skips the caret restore.
-  int? _captureGlobalCaret(List<List<paginator.Block>> pages) {
-    final driver = _pages[_activeIndex].controller.driver;
-    if (driver is! AppFlowyTextDriver) return null;
-    final caret = driver.caret;
-    if (caret == null || caret.path.length != 1) return null;
-    final blockIdx = caret.path.first;
-
-    var total = 0;
-    for (var p = 0; p < _activeIndex && p < pages.length; p++) {
-      for (final b in pages[p]) {
-        total += paginator.blockPlainText(b).length;
-      }
-    }
-    final active = _activeIndex < pages.length ? pages[_activeIndex] : const [];
-    for (var b = 0; b < blockIdx && b < active.length; b++) {
-      total += paginator.blockPlainText(active[b]).length;
-    }
-    return total + caret.offset;
-  }
-
-  /// Map a global character offset (from [_captureGlobalCaret]) to a concrete
-  /// caret target in the post-reflow [paged] layout. Lands at the END of the
-  /// first block that contains the offset — so a caret sitting at a block
-  /// boundary stays with the text just typed, not the start of the next block.
-  _CaretTarget? _locateCaret(List<List<paginator.Block>> paged, int globalCaret) {
-    var remaining = globalCaret;
-    _CaretTarget? last;
-    for (var p = 0; p < paged.length; p++) {
-      for (var b = 0; b < paged[p].length; b++) {
-        final len = paginator.blockPlainText(paged[p][b]).length;
-        last = _CaretTarget(p, b, len);
-        if (remaining <= len) return _CaretTarget(p, b, remaining);
-        remaining -= len;
-      }
-    }
-    // Ran past the end (shouldn't happen — text is conserved). Land at the very
-    // end of the last block rather than losing the caret.
-    return last;
-  }
-
-  int _maxPageIdNum() {
-    var maxNum = 0;
-    for (final p in _pages) {
-      final m = RegExp(r'^p(\d+)$').firstMatch(p.pageId);
-      if (m != null) {
-        final n = int.parse(m.group(1)!);
-        if (n > maxNum) maxNum = n;
-      }
-    }
-    return maxNum;
-  }
-
-  static bool _samePageBlocks(
-    List<List<paginator.Block>> a,
-    List<List<paginator.Block>> b,
-  ) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (jsonEncode(a[i]) != jsonEncode(b[i])) return false;
-    }
-    return true;
   }
 
   static bool _isEmptyParagraph(Map<String, dynamic> block) {
@@ -513,20 +442,9 @@ class PagedNoteController extends ChangeNotifier {
 
   @override
   void dispose() {
-    _reflowTimer?.cancel();
     for (final p in _pages) {
       p.controller.dispose();
     }
     super.dispose();
   }
-}
-
-/// Where a snapshotted caret should land after a reflow: the [blockIndex]-th
-/// block on page [pageIndex], at character [offset] within it.
-class _CaretTarget {
-  const _CaretTarget(this.pageIndex, this.blockIndex, this.offset);
-
-  final int pageIndex;
-  final int blockIndex;
-  final int offset;
 }
