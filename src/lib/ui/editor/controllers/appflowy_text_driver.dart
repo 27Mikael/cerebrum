@@ -16,8 +16,30 @@ import 'package:cerebrum_app/ui/editor/blocks/code_block/code_block_component.da
 /// EditorSurface, EditorScaffold) works against the interface, not this.
 class AppFlowyTextDriver extends ChangeNotifier
     implements TextEditingDriver, VimModeAware {
-  AppFlowyTextDriver({Map<String, dynamic>? initialDocumentJson}) {
-    _editorState = _buildEditorState(initialDocumentJson);
+  AppFlowyTextDriver({
+    Map<String, dynamic>? initialDocumentJson,
+    int? initialCaretBlockIndex,
+    int? initialCaretOffset,
+    bool autoFocus = false,
+  }) {
+    _autoFocus = autoFocus;
+    _editorState = _buildEditorState(
+      initialDocumentJson,
+      initialCaretBlockIndex,
+      initialCaretOffset,
+    );
+    // shrinkWrap: true → AppFlowyEditor lays the document out as a Column with
+    // NO internal scroll view. Required when the editor is embedded inside
+    // another scrollable (the paged editor stacks one editor per page inside a
+    // ListView): a default (non-shrinkWrap) controller builds a
+    // ScrollablePositionedList whose selection service can't find its
+    // EditorScrollController provider once nested — the
+    // "Could not find the correct Provider<EditorScrollController>" crash seen
+    // on multi-page notes. Built once and reused across every buildEditor call.
+    _scrollController = EditorScrollController(
+      editorState: _editorState,
+      shrinkWrap: true,
+    );
     _transactionSub = _editorState.transactionStream.listen(
       (_) => notifyListeners(),
     );
@@ -39,7 +61,27 @@ class AppFlowyTextDriver extends ChangeNotifier
   }
 
   late final EditorState _editorState;
+  late final EditorScrollController _scrollController;
   late final StreamSubscription<dynamic> _transactionSub;
+  bool _autoFocus = false;
+
+  /// Called when Backspace is pressed with the caret at the VERY START of this
+  /// page's first block. Set by [PagedNoteController] to merge the page up into
+  /// the previous one. Returns true if it handled the key (so the editor's own
+  /// backspace is suppressed), false to let the default backspace run (e.g. this
+  /// is already the first page). Null when the note isn't paged.
+  bool Function()? onBackspaceAtStart;
+
+  /// The current collapsed caret as `(path, offset)`, or null when there's no
+  /// selection or it's a range. `path` is the block path (length 1 for a
+  /// top-level block; longer when nested, e.g. inside a table cell). Used by
+  /// [PagedNoteController] to snapshot the caret before a reflow so it can be
+  /// re-seeded afterwards.
+  ({List<int> path, int offset})? get caret {
+    final sel = _editorState.selection;
+    if (sel == null || !sel.isCollapsed) return null;
+    return (path: List<int>.from(sel.start.path), offset: sel.start.offset);
+  }
 
   // Built ONCE and reused across every `buildEditor` call, rather than
   // being reconstructed from scratch on every rebuild.
@@ -63,9 +105,38 @@ class AppFlowyTextDriver extends ChangeNotifier
   // sees the *same* lists across rebuilds and has no reason to
   // reinitialize anything.
   late final List<CommandShortcutEvent> _commandShortcutEvents = [
+    // FIRST: intercept backspace-at-page-start so it merges into the previous
+    // page instead of doing nothing. Returns ignored in every other case, so
+    // normal backspace (and the vim/standard handlers below) run untouched.
+    _mergeToPreviousPageOnBackspace(),
     ...EditorShortcuts.getCustomShortcuts(vimMode),
     ...standardCommandShortcutEvents,
   ];
+
+  CommandShortcutEvent _mergeToPreviousPageOnBackspace() {
+    return CommandShortcutEvent(
+      key: 'merge into previous page on backspace at start',
+      getDescription:
+          () =>
+              'Backspace at the very start of a page merges it into the previous page',
+      command: 'backspace',
+      handler: (editorState) {
+        final handler = onBackspaceAtStart;
+        if (handler == null) return KeyEventResult.ignored;
+        final sel = editorState.selection;
+        if (sel == null || !sel.isCollapsed) return KeyEventResult.ignored;
+        if (sel.start.offset != 0) return KeyEventResult.ignored;
+        // Only the caret at offset 0 of the FIRST top-level block (path [0]).
+        // TODO(tables): when that first block is a table this still fires and
+        // flows the whole table up to the previous page. Deferred with the rest
+        // of the table-specific pagination work — decide whether a table should
+        // block/merge differently.
+        final path = sel.start.path;
+        if (path.length != 1 || path.first != 0) return KeyEventResult.ignored;
+        return handler() ? KeyEventResult.handled : KeyEventResult.ignored;
+      },
+    );
+  }
   // Same identity-stability reasoning as `_commandShortcutEvents` above:
   // built once, reused across every `buildEditor` call rather than
   // rebuilt inline.
@@ -200,16 +271,26 @@ class AppFlowyTextDriver extends ChangeNotifier
   Widget buildEditor(BuildContext context) {
     return AppFlowyEditor(
       editorState: _editorState,
-      // Grabs keyboard focus as soon as this widget mounts, so the
-      // initial end-of-document selection set in `_buildEditorState`
-      // above is immediately usable without the user clicking in first.
-      // NOTE: `autoFocus` is assumed to exist on AppFlowyEditor based on
-      // standard Flutter widget convention (most editable-text-style
-      // widgets expose it) — double check this against your pinned
-      // `appflowy_editor` version if it doesn't compile; some versions
-      // instead take a `focusNode` you'd need to `requestFocus()` on
-      // yourself via a PostFrameCallback.
-      autoFocus: true,
+      // Embed as a non-scrolling Column so this editor coexists with the
+      // paged ListView (see _scrollController). Without it, nesting the
+      // editor's own scroll view inside the page list throws the
+      // "Provider<EditorScrollController>" error on multi-page notes.
+      editorScrollController: _scrollController,
+      // Never let a page's editor drive scrolling to chase the caret. Each page
+      // is a bounded sheet inside the outer page ListView; auto-scroll-into-view
+      // would scroll that OUTER list — which showed up as the view lurching to
+      // the previous page after a backspace-merge, and "jumping to a new page"
+      // when Enter pushed the caret past the sheet. The user scrolls the page
+      // list themselves. (Gates desktop_scroll_service's scrollTo.)
+      disableAutoScroll: true,
+      disableScrollService: false,
+
+      // Off by default: with one editor per page, all pages auto-focusing at
+      // once fights for the keyboard and surfaced the "Null check operator used
+      // on a null value" on open. Only a page created to receive focus (e.g.
+      // the freshly-merged page after a backspace-merge) sets this true so the
+      // caret lands there.
+      autoFocus: _autoFocus,
       // Carries the standard block builders plus the 'code_block' type
       // added above (registered against CodeBlockComponentBuilder with
       // syntax highlighting). Cached field — see _blockComponentBuilders.
@@ -248,14 +329,33 @@ class AppFlowyTextDriver extends ChangeNotifier
     ],
   };
 
-  static EditorState _buildEditorState(Map<String, dynamic>? initial) {
+  static EditorState _buildEditorState(
+    Map<String, dynamic>? initial, [
+    int? caretBlockIndex,
+    int? caretOffset,
+  ]) {
     final docJson = initial ?? _emptyDocument;
     final state = _constructEditorState(docJson);
 
-    // Place the cursor at the end of the last line on open, rather than
-    // leaving `selection` null until the user clicks — combined with
-    // `autoFocus: true` on AppFlowyEditor below, this makes the editor
-    // immediately interactive on open with no click required.
+    // Seed the caret. `caretBlockIndex` targets a specific top-level block:
+    // the backspace-merge passes it with offset 0 (the seam); the reflow's
+    // caret hand-off passes an explicit `caretOffset` to land the caret exactly
+    // where the user was typing. Otherwise the caret goes to the END of the last
+    // line, so a focused page is immediately editable with no click.
+    final children = state.document.root.children;
+    if (caretBlockIndex != null && children.isNotEmpty) {
+      final idx = caretBlockIndex.clamp(0, children.length - 1).toInt();
+      // Clamp the offset to the target block's length (a non-text or shorter
+      // block can't hold an offset carried over from a longer one).
+      final blockLen = children[idx].delta?.length ?? 0;
+      final off = (caretOffset ?? 0).clamp(0, blockLen).toInt();
+      state.updateSelectionWithReason(
+        Selection.collapsed(Position(path: [idx], offset: off)),
+        reason: SelectionUpdateReason.uiEvent,
+      );
+      return state;
+    }
+
     final lastNode = state.document.last;
     if (lastNode != null) {
       final offset = lastNode.delta?.length ?? 0;
@@ -285,6 +385,7 @@ class AppFlowyTextDriver extends ChangeNotifier
   @override
   void dispose() {
     _transactionSub.cancel();
+    _scrollController.dispose();
     vimMode.dispose();
     super.dispose();
   }

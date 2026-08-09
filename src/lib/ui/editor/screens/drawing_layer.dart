@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:scribble/scribble.dart';
-import 'radial_tool_dial.dart';
 
-/// Freehand ink layer, backed by `scribble` instead of
-/// `flutter_drawing_board`. Tool selection is [ToolDialHub] — a radial
-/// pie menu, not a linear button row. See radial_tool_dial.dart for why
-/// it's a fixed launcher button rather than a long-press over the whole
-/// canvas.
+/// Freehand ink layer for ONE page, backed by `scribble` instead of
+/// `flutter_drawing_board`. This is purely the per-page canvas.
+///
+/// Tool selection lives elsewhere: a SINGLE radial [ToolDialHub] is mounted
+/// once at the editor-screen level (see EditorScaffold), floating above the
+/// whole page list and driving the active page's notifier — rather than one
+/// dial embedded in every page (which duplicated the button per page and
+/// clipped the wheel to a single sheet's bounds). See radial_tool_dial.dart.
 ///
 /// Mouse input on desktop needs to be explicitly allowed — that's
 /// handled once, in [NoteEditorController], via
@@ -20,11 +22,6 @@ class NoteDrawingLayer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        Positioned.fill(child: Scribble(notifier: notifier)),
-        Positioned.fill(child: ToolDialHub(notifier: notifier)),
-      ],
-    );
+    return Scribble(notifier: notifier);
   }
 }

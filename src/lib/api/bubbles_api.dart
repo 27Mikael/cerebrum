@@ -153,24 +153,27 @@ class BubbleNotesApi {
     );
   }
 
-  // Update note
+  // Update note — sends the WHOLE page set. The daemon's /update endpoint
+  // reconciles per page_id (edits + adds + deletes), so page merges/removals
+  // persist. (The old sync/push path did an additive version-vector merge that
+  // dropped edits and couldn't delete pages.)
   static Future<Map<String, dynamic>> updateNote({
     required String bubbleId,
     required String filename,
     required String title,
-    required Map<String, dynamic> content,
-    List<Map<String, dynamic>>? ink,
+    required List<Map<String, dynamic>> pages,
+    String? noteId,
   }) async {
-    // Ensure content has document key
-    if (!content.containsKey('document')) {
-      content = {'document': content};
-    }
+    final id = noteId ??
+        (filename.endsWith('.json')
+            ? filename.substring(0, filename.length - 5)
+            : filename);
 
     final note = {
-      "ink": ink ?? [],
       "title": title,
-      "content": content,
+      "note_id": id,
       "bubble_id": bubbleId,
+      "pages": pages,
     };
 
     final response = await http.put(

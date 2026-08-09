@@ -3,12 +3,12 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cerebrum_app/api/bubbles_api.dart';
 import 'package:cerebrum_app/api/learning_center_api.dart';
-import 'package:cerebrum_app/services/sync_service.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
-import 'package:cerebrum_app/ui/editor/controllers/note_editor_controller.dart';
+import 'package:cerebrum_app/ui/editor/controllers/paged_note_controller.dart';
 import 'package:cerebrum_app/ui/editor/controllers/text_editing_driver.dart';
 import 'package:cerebrum_app/ui/editor/controllers/appflowy_text_driver.dart';
-import 'package:cerebrum_app/ui/editor/screens/editor_surface.dart';
+import 'package:cerebrum_app/ui/editor/screens/paged_editor.dart';
+import 'package:cerebrum_app/ui/editor/screens/radial_tool_dial.dart';
 
 enum _TextEngine { appFlowy, superEditor }
 
@@ -36,7 +36,7 @@ class EditorScaffold extends StatefulWidget {
 }
 
 class _EditorScaffoldState extends State<EditorScaffold> {
-  late final NoteEditorController _editorController;
+  late final PagedNoteController _editorController;
   _TextEngine _currentEngine = _TextEngine.appFlowy;
 
   // App-session default for which mode a note opens in. Lives only for
@@ -112,10 +112,13 @@ class _EditorScaffoldState extends State<EditorScaffold> {
       'first-elem keys: ${inkJson?.firstOrNull?.keys.toList()}',
     );
 
-    _editorController = NoteEditorController(
-      driver: AppFlowyTextDriver(initialDocumentJson: docJson),
-      initialInkJson: inkJson,
-      startInDrawingMode: _defaultStartInDrawingMode,
+    _editorController = PagedNoteController.fromNote(
+      pages:
+          widget.note['pages'] != null
+              ? List<Map<String, dynamic>>.from(widget.note['pages'])
+              : null,
+      legacyDocument: docJson,
+      legacyInk: inkJson,
     );
     _editorController.addListener(_onEditorChanged);
 
@@ -140,8 +143,7 @@ class _EditorScaffoldState extends State<EditorScaffold> {
   }
 
   String _serializedEditorState() =>
-      '${jsonEncode(_editorController.documentJson)}|'
-      '${jsonEncode(_editorController.inkJson)}';
+      jsonEncode(_editorController.toPagesJson());
 
   void _updateLastSavedState() {
     _lastSavedState = _serializedEditorState();
@@ -164,16 +166,27 @@ class _EditorScaffoldState extends State<EditorScaffold> {
       final bubbleId = widget.note['bubble_id'] as String;
       final filename = widget.note['filename'] as String?;
 
-      // Existing note → push through sync (version-vector merge, offline-safe
-      // queue). New note → create as before; subsequent saves sync.
+      // Existing note → PUT the whole page set to /update, which reconciles per
+      // page_id (edits + adds + deletes) so page merges/removals persist. New
+      // note → create as before; the created note has a filename, so every
+      // later save takes the /update path.
       final updated =
           filename != null
-              ? await _syncSave(bubbleId, filename)
+              ? await BubbleNotesApi.updateNote(
+                bubbleId: bubbleId,
+                filename: filename,
+                title: widget.note['title'] ?? 'Untitled',
+                noteId: widget.note['note_id'] as String?,
+                pages: _editorController.toPagesJson(),
+              )
               : await BubbleNotesApi.createNote(
                 bubbleId: bubbleId,
                 title: widget.note['title'] ?? 'Untitled',
-                content: {'document': _editorController.documentJson},
-                ink: _editorController.inkJson,
+                content: {
+                  'document':
+                      _editorController.pages.first.controller.documentJson,
+                },
+                ink: _editorController.pages.first.controller.inkJson,
               );
 
       widget.note.addAll(updated);
@@ -181,27 +194,6 @@ class _EditorScaffoldState extends State<EditorScaffold> {
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
-  }
-
-  /// Save an existing note via [SyncService.pushNote]: the server merges our
-  /// version (version-vector; last-writer-wins per page on concurrent edits;
-  /// ink union) and returns the merged note. If the daemon is unreachable the
-  /// push is queued offline and we keep the local edits; drainOutbox() retries.
-  Future<Map<String, dynamic>> _syncSave(String bubbleId, String filename) async {
-    final noteId =
-        filename.endsWith('.json')
-            ? filename.substring(0, filename.length - 5)
-            : filename;
-    final note = <String, dynamic>{
-      'title': widget.note['title'] ?? 'Untitled',
-      'content': {'document': _editorController.documentJson},
-      'ink': _editorController.inkJson,
-      'bubble_id': bubbleId,
-      'note_id': noteId,
-    };
-    final result = await SyncService.pushNote(bubbleId, noteId, note);
-    if (result == null) return note; // queued offline — keep local edits
-    return Map<String, dynamic>.from(result['note'] as Map);
   }
 
   Future<void> _toggleAnalysis(bool newValue) async {
@@ -488,16 +480,17 @@ class _EditorScaffoldState extends State<EditorScaffold> {
   /// not every engine implements [VimModeAware] (see
   /// text_editing_driver.dart), so the menu item below disables itself
   /// rather than toggling something that doesn't exist.
-  bool get _vimModeAvailable => _editorController.driver is VimModeAware;
+  bool get _vimModeAvailable =>
+      _editorController.activeController.driver is VimModeAware;
 
   bool get _vimModeEnabled {
-    final driver = _editorController.driver;
+    final driver = _editorController.activeController.driver;
     if (driver is! VimModeAware) return false;
     return (driver as VimModeAware).vimMode.isEnabled;
   }
 
   void _toggleVimMode() {
-    final driver = _editorController.driver;
+    final driver = _editorController.activeController.driver;
     if (driver is! VimModeAware) return;
     final vimAware = driver as VimModeAware;
     vimAware.vimMode.setEnabled(!vimAware.vimMode.isEnabled);
@@ -516,7 +509,7 @@ class _EditorScaffoldState extends State<EditorScaffold> {
         // Reuse whatever content the previous driver reports, so
         // switching back to AppFlowy after testing doesn't lose it.
         newDriver = AppFlowyTextDriver(
-          initialDocumentJson: _editorController.documentJson,
+          initialDocumentJson: _editorController.activeController.documentJson,
         );
         break;
       case _TextEngine.superEditor:
@@ -613,6 +606,34 @@ class _EditorScaffoldState extends State<EditorScaffold> {
             },
           ),
 
+          // Page layout: vertical scroll (default) ↔ horizontal slideshow.
+          AnimatedBuilder(
+            animation: _editorController,
+            builder: (context, _) {
+              final horizontal =
+                  _editorController.layout == PageLayoutMode.horizontal;
+              return IconButton(
+                icon: Icon(horizontal ? Icons.view_carousel : Icons.view_day),
+                tooltip:
+                    horizontal
+                        ? 'Pages: slideshow (tap for scroll)'
+                        : 'Pages: scroll (tap for slideshow)',
+                onPressed: _editorController.toggleLayout,
+              );
+            },
+          ),
+
+          // Manual continuous-pagination trigger. Reflow also fires live while
+          // typing (debounced — see PagedNoteController._scheduleReflow); this
+          // button stays as an on-demand escape hatch and for tuning the
+          // paginator. Reflows text so no page exceeds the line budget, keeping
+          // the caret where you were typing.
+          IconButton(
+            icon: const Icon(Icons.auto_stories),
+            tooltip: 'Reflow pages',
+            onPressed: () => _editorController.repaginate(),
+          ),
+
           // Secondary, settings-style actions that don't need to be
           // permanently visible: whether analysis runs for this note at
           // all (distinct from just viewing the panel above), and the
@@ -706,8 +727,30 @@ class _EditorScaffoldState extends State<EditorScaffold> {
       body: SafeArea(
         child: Stack(
           children: [
+            Positioned.fill(child: PagedEditor(controller: _editorController)),
+
+            // Single screen-level drawing dial (was previously embedded once
+            // per page). Shown only in drawing mode and pointed at the ACTIVE
+            // page's ink notifier, so switching pages retargets the same dial.
+            // It floats above the whole page list; empty areas of the overlay
+            // don't absorb pointers, so strokes still reach the page canvas
+            // underneath. Positioned.fill is the direct Stack child (a Positioned
+            // returned from inside the AnimatedBuilder would break parent-data).
             Positioned.fill(
-              child: EditorSurface(controller: _editorController),
+              child: AnimatedBuilder(
+                animation: _editorController,
+                builder: (context, _) {
+                  if (!_editorController.drawingEnabled) {
+                    return const SizedBox.shrink();
+                  }
+                  return ToolDialHub(
+                    notifier:
+                        _editorController.activeController.drawingNotifier,
+                    // Selecting a pen/highlighter/eraser follows across pages.
+                    onSelectTool: _editorController.applyDrawingTool,
+                  );
+                },
+              ),
             ),
 
             if (_showAnalysisPanel && _hasAttemptedLoad)

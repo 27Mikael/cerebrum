@@ -42,10 +42,26 @@ class _PagedEditorState extends State<PagedEditor> {
           }
           return Padding(
             padding: const EdgeInsets.all(12),
-            child: PageSurface(
-              controller: pages[i].controller,
-              drawingEnabled: c.drawingEnabled,
-              pageNumber: i + 1,
+            // Touching a page makes it the ACTIVE page. In vertical scroll mode
+            // nothing else tracks which page you're on, and the single
+            // screen-level drawing dial drives the active page's notifier — so
+            // without this, drawing / undo / redo would target the wrong page.
+            // A passive Listener observes pointer-down without entering the
+            // gesture arena, so it doesn't interfere with drawing or text input.
+            child: Listener(
+              behavior: HitTestBehavior.deferToChild,
+              onPointerDown: (_) => c.setActive(i),
+              // Key by controller identity: pages keep the same element across
+              // normal rebuilds (preserving editor/scroll state), but a page
+              // whose controller was replaced — e.g. the freshly-merged page
+              // after a backspace-merge — gets a new key and REMOUNTS, so its
+              // `autoFocus` fires and the caret lands at the merge seam.
+              child: PageSurface(
+                key: ObjectKey(pages[i].controller),
+                controller: pages[i].controller,
+                drawingEnabled: c.drawingEnabled,
+                pageNumber: i + 1,
+              ),
             ),
           );
         }

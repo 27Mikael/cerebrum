@@ -70,9 +70,17 @@ final double _wedgeAngle = 2 * math.pi / _wedgeSpecs.length;
 /// conflict that's easy to get wrong. Keeping the gesture scoped to this
 /// one button sidesteps that entirely.
 class ToolDialHub extends StatefulWidget {
-  const ToolDialHub({super.key, required this.notifier});
+  const ToolDialHub({super.key, required this.notifier, this.onSelectTool});
 
+  /// The ACTIVE page's ink notifier — drives the hub's current-tool indicator
+  /// and receives undo/redo (which are page-local actions, not tools).
   final ScribbleNotifier notifier;
+
+  /// Called when a persistent tool (pen / highlighter / eraser) is picked, with
+  /// a mutation to apply to a notifier. The owner (PagedNoteController) broadcasts
+  /// it to every page so the tool FOLLOWS across pages. When null, the tool is
+  /// applied directly to [notifier] (single-surface fallback).
+  final void Function(void Function(ScribbleNotifier) config)? onSelectTool;
 
   @override
   State<ToolDialHub> createState() => _ToolDialHubState();
@@ -167,22 +175,40 @@ class _ToolDialHubState extends State<ToolDialHub> {
       case _DialTool.penPurple:
       case _DialTool.penTeal:
       case _DialTool.penCoral:
-        widget.notifier.setColor(_wedgeSpecs[tool]!.color);
-        widget.notifier.setStrokeWidth(4);
+        final color = _wedgeSpecs[tool]!.color;
+        _selectTool((n) {
+          n.setColor(color);
+          n.setStrokeWidth(4);
+        });
         break;
       case _DialTool.highlighter:
-        widget.notifier.setColor(Colors.yellow.withValues(alpha: 0.4));
-        widget.notifier.setStrokeWidth(16);
+        _selectTool((n) {
+          n.setColor(Colors.yellow.withValues(alpha: 0.4));
+          n.setStrokeWidth(16);
+        });
         break;
       case _DialTool.eraser:
-        widget.notifier.setEraser();
+        _selectTool((n) => n.setEraser());
         break;
+      // Undo/redo are page-LOCAL actions, not persistent tools — they run on the
+      // active page's notifier and are never broadcast/remembered.
       case _DialTool.undo:
         if (widget.notifier.canUndo) widget.notifier.undo();
         break;
       case _DialTool.redo:
         if (widget.notifier.canRedo) widget.notifier.redo();
         break;
+    }
+  }
+
+  /// Route a persistent tool selection through [ToolDialHub.onSelectTool] so it
+  /// FOLLOWS across pages; fall back to the active notifier when unset.
+  void _selectTool(void Function(ScribbleNotifier) config) {
+    final onSelect = widget.onSelectTool;
+    if (onSelect != null) {
+      onSelect(config);
+    } else {
+      config(widget.notifier);
     }
   }
 
@@ -212,9 +238,17 @@ class _ToolDialHubState extends State<ToolDialHub> {
         // also global. But `Positioned.left/top` below are relative to
         // this Stack, not the screen, so it needs converting back
         // before use.
+        // Only resolve the global→local transform while the dial is OPEN, and
+        // guard on a non-null render object. (`localCenter` is only read by the
+        // `if (_open)` branch; when closed it stays Offset.zero and is unused.)
+        // The dial is now a single overlay at the editor-screen level, not one
+        // instance per page inside a lazy ListView, so the old "sliver child
+        // layoutOffset is null for offscreen pages → Null check operator" crash
+        // no longer applies — but keeping the guard is harmless and defensive.
         final stackBox = context.findRenderObject() as RenderBox?;
-        final localCenter =
-            stackBox != null ? stackBox.globalToLocal(_center) : Offset.zero;
+        final localCenter = (_open && stackBox != null)
+            ? stackBox.globalToLocal(_center)
+            : Offset.zero;
 
         return Stack(
           clipBehavior: Clip.none,
