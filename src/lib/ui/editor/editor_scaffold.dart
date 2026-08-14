@@ -3,9 +3,15 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cerebrum_app/api/bubbles_api.dart';
 import 'package:cerebrum_app/api/learning_center_api.dart';
+import 'package:cerebrum_app/services/id.dart';
+import 'package:cerebrum_app/services/note_store.dart';
+import 'package:cerebrum_app/services/sync_service.dart';
+import 'package:cerebrum_app/ui/editor/blocks/image/note_image_resolver.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:cerebrum_app/ui/editor/controllers/paged_note_controller.dart';
+import 'package:cerebrum_app/ui/editor/controllers/analysis_mode_controller.dart';
 import 'package:cerebrum_app/ui/editor/controllers/text_editing_driver.dart';
+import 'package:cerebrum_app/ui/editor/controllers/vim_move_controller.dart';
 import 'package:cerebrum_app/ui/editor/controllers/appflowy_text_driver.dart';
 import 'package:cerebrum_app/ui/editor/screens/paged_editor.dart';
 import 'package:cerebrum_app/ui/editor/screens/radial_tool_dial.dart';
@@ -47,6 +53,23 @@ class _EditorScaffoldState extends State<EditorScaffold> {
   // send later saves to `/bubbles//notes/update/...` (404). This stable copy is
   // immune to that clobber.
   String? _bubbleId;
+
+  /// Eraser mode, shared by the tool wheel (which toggles it) and every page's
+  /// ink layer (which reads it). Lives here so the choice is global across pages.
+  /// Defaults to partial (split) erase — the mode we built for note-taking.
+  final ValueNotifier<bool> _partialEraser = ValueNotifier(true);
+
+  /// Eraser diameter (logical px), shared by the tool wheel (which sizes it from
+  /// its size selector) and every page's ink layer (which erases by it). Lives
+  /// here so the choice is global across pages. Seeded from the persisted
+  /// [EditorSettings.eraserWidth] default; the wheel pushes the loaded value
+  /// once its settings load.
+  final ValueNotifier<double> _eraserWidth = ValueNotifier(24);
+
+  /// SCAFFOLD — drives the vim "analysis" review mode: step through analysis
+  /// chunks, or open the full panel. Fed from [_analysisChunks] on load; the
+  /// per-chunk highlight/scroll is still a TODO inside the controller.
+  final AnalysisModeController _analysisMode = AnalysisModeController();
 
   // App-session default for which mode a note opens in. Lives only for
   // the lifetime of the app process — flip it from the "More" menu and
@@ -110,6 +133,16 @@ class _EditorScaffoldState extends State<EditorScaffold> {
     // Seed the toggle from the note payload (backend field: analyse_note).
     _analysisEnabled = widget.note['analyse_note'] as bool? ?? true;
 
+    // "Opt to see the full analysis" from analysis-review mode → open the panel
+    // (loading it first if we haven't yet).
+    _analysisMode.onOpenFullPanel = () {
+      if (!_hasAttemptedLoad) {
+        _loadAnalysis();
+      } else {
+        setState(() => _showAnalysisPanel = true);
+      }
+    };
+
     final contentData =
         widget.initialTextJson ??
         widget.note['content'] as Map<String, dynamic>?;
@@ -129,11 +162,37 @@ class _EditorScaffoldState extends State<EditorScaffold> {
       'first-elem keys: ${inkJson?.firstOrNull?.keys.toList()}',
     );
 
+    // Ensure the note has a client-owned id up front, so images can be cached
+    // locally (and the note can persist) before the daemon ever assigns a
+    // filename.
+    final noteId =
+        (widget.note['note_id'] as String?) ??
+        parsedNoteId ??
+        Ulid.generate();
+    widget.note['note_id'] = noteId;
+
+    // Prime the image resolver for this note (local cache paths + recorded
+    // daemon URLs). The open path awaits this before navigating; this refresh
+    // covers notes opened another way.
+    final bid = _bubbleId;
+    if (bid != null && bid.isNotEmpty) {
+      NoteImageResolver.configureForNote(bubbleId: bid, noteId: noteId);
+    }
+
+    // Loaded documents hold stable `cerebrum-image://` refs; swap them for
+    // loadable display values (local file path, else daemon URL) before the
+    // editor renders. `resolve` leaves legacy absolute URLs untouched.
+    final rawPages =
+        widget.note['pages'] != null
+            ? List<Map<String, dynamic>>.from(widget.note['pages'])
+            : null;
+    final loadedPages =
+        rawPages == null
+            ? null
+            : NoteImageResolver.mapPagesUrls(rawPages, NoteImageResolver.resolve);
+
     _editorController = PagedNoteController.fromNote(
-      pages:
-          widget.note['pages'] != null
-              ? List<Map<String, dynamic>>.from(widget.note['pages'])
-              : null,
+      pages: loadedPages,
       legacyDocument: docJson,
       legacyInk: inkJson,
     );
@@ -144,8 +203,7 @@ class _EditorScaffoldState extends State<EditorScaffold> {
     // its filename on first save.
     _editorController.imageUploader = (bytes, name) async {
       final bubbleId = _bubbleId;
-      final filename = widget.note['filename'] as String?;
-      if (bubbleId == null || bubbleId.isEmpty || filename == null) {
+      if (bubbleId == null || bubbleId.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Save the note before adding images.')),
@@ -153,18 +211,31 @@ class _EditorScaffoldState extends State<EditorScaffold> {
         }
         return null;
       }
+      final nId = widget.note['note_id'] as String;
+      final ext = name.contains('.') ? name.split('.').last : 'png';
+      final imageName = '${Ulid.generate()}.$ext';
       try {
-        return await BubbleNotesApi.uploadNoteImage(
-          bubbleId: bubbleId,
-          filename: filename,
-          bytes: bytes,
-          imageFilename: name,
+        // Cache the bytes locally FIRST (works offline), then queue the upload.
+        // We hand the editor the local file path to render now; on save the doc
+        // stores a stable `cerebrum-image://` ref (see NoteImageResolver.toRef).
+        final file = await NoteStore.writeImage(
+          bubbleId,
+          nId,
+          imageName,
+          bytes,
         );
+        NoteImageResolver.noteLocalImage(imageName);
+        await SyncService.queueImageUpload(
+          bubbleId: bubbleId,
+          noteId: nId,
+          name: imageName,
+        );
+        return file.path;
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Image upload failed: $e')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Image save failed: $e')));
         }
         return null;
       }
@@ -220,35 +291,64 @@ class _EditorScaffoldState extends State<EditorScaffold> {
 
     try {
       final filename = widget.note['filename'] as String?;
+      final title = widget.note['title'] ?? 'Untitled';
 
-      // Existing note → PUT the whole page set to /update, which reconciles per
-      // page_id (edits + adds + deletes) so page merges/removals persist. New
-      // note → create as before; the created note has a filename, so every
-      // later save takes the /update path.
-      final updated =
-          filename != null
-              ? await BubbleNotesApi.updateNote(
-                bubbleId: bubbleId,
-                filename: filename,
-                title: widget.note['title'] ?? 'Untitled',
-                noteId: widget.note['note_id'] as String?,
-                pages: _editorController.toPagesJson(),
-              )
-              : await BubbleNotesApi.createNote(
-                bubbleId: bubbleId,
-                title: widget.note['title'] ?? 'Untitled',
-                content: {
-                  'document':
-                      _editorController.pages.first.controller.documentJson,
-                },
-                ink: _editorController.pages.first.controller.inkJson,
-              );
+      // Client-owned note id, so the note can persist locally before the daemon
+      // ever assigns it a filename. Minted in initState; kept here as a guard.
+      var noteId =
+          widget.note['note_id'] as String? ?? _noteIdFromFilename(filename);
+      if (noteId == null || noteId.isEmpty) {
+        noteId = Ulid.generate();
+        widget.note['note_id'] = noteId;
+      }
 
-      widget.note.addAll(updated);
-      // The daemon echoes an empty bubble_id — keep the real one in the map so
-      // anything still reading widget.note (and our own re-reads) stays valid.
-      widget.note['bubble_id'] = bubbleId;
+      // The live doc holds loadable image srcs (local file paths / URLs); the
+      // persisted + pushed copy stores stable `cerebrum-image://` refs instead,
+      // so it survives base-URL changes and offline reloads.
+      final pages = NoteImageResolver.mapPagesUrls(
+        _editorController.toPagesJson(),
+        NoteImageResolver.toRef,
+      );
+
+      // 1) Local write FIRST — always succeeds, offline or not. This is the
+      // never-lose-a-write guarantee: the edit is durable before we ever touch
+      // the network.
+      await NoteStore.writeNote(
+        bubbleId: bubbleId,
+        noteId: noteId,
+        manifest: {
+          'title': title,
+          'filename': filename,
+          'note_id': noteId,
+          'bubble_id': bubbleId,
+          'analyse_note': _analysisEnabled,
+          if (widget.note['version'] != null) 'version': widget.note['version'],
+        },
+        pages: pages,
+      );
+      await NoteStore.markDirty(bubbleId, noteId);
+      // The local copy is saved, so from the user's POV the note is saved.
       _updateLastSavedState();
+
+      // 2) Best-effort push through the outbox. Reconciles per page_id on the
+      // daemon (edits + adds + deletes, LWW); queued for retry if we're offline.
+      // On success SyncService persists the server-merged copy locally + clears
+      // the dirty flag, so we just adopt the merged fields into the live map.
+      final merged = await SyncService.queueSave(
+        bubbleId: bubbleId,
+        noteId: noteId,
+        title: title,
+        pages: pages,
+        filename: filename,
+        analyseNote: _analysisEnabled,
+      );
+      if (merged != null) {
+        widget.note.addAll(merged);
+        // The daemon echoes an empty bubble_id — keep the real one in the map so
+        // anything still reading widget.note (and our own re-reads) stays valid.
+        widget.note['bubble_id'] = bubbleId;
+        widget.note['note_id'] = noteId;
+      }
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
@@ -329,6 +429,7 @@ class _EditorScaffoldState extends State<EditorScaffold> {
             full['chunk_diagnostics'] as List<dynamic>? ?? [],
           );
           _rebuildBlockAnalysis();
+          _rebuildAnalysisModeChunks();
           _cachedAnalysis = null;
         } else {
           _analysisData = null;
@@ -490,6 +591,22 @@ class _EditorScaffoldState extends State<EditorScaffold> {
   ) =>
       _blockAnalysis[pageId]?[blockId];
 
+  /// Feed the flattened chunks to the analysis-review controller (SCAFFOLD).
+  /// Only chunks that actually map to a page/blocks are navigable.
+  void _rebuildAnalysisModeChunks() {
+    final refs = <AnalysisChunkRef>[
+      for (final chunk in _analysisChunks)
+        if ((chunk['pageId'] as String?)?.isNotEmpty ?? false)
+          AnalysisChunkRef(
+            chunkId: (chunk['chunkId'] ?? '').toString(),
+            pageId: chunk['pageId'] as String,
+            blockIds: (chunk['blockIds'] as List?)?.cast<String>() ?? const [],
+            chunk: chunk,
+          ),
+    ];
+    _analysisMode.setChunks(refs);
+  }
+
   /// Rebuild the pageId → blockId → chunks lookup from `_analysisChunks`.
   void _rebuildBlockAnalysis() {
     final map = <String, Map<String, List<Map<String, dynamic>>>>{};
@@ -600,6 +717,128 @@ class _EditorScaffoldState extends State<EditorScaffold> {
     // rebuilt from scratch on open each time anyway.
   }
 
+  /// Enter analysis-review mode on the active page's driver (SCAFFOLD). Loads
+  /// the analysis first if we haven't yet, so there are chunks to step through.
+  void _enterAnalysisMode() {
+    final driver = _editorController.activeController.driver;
+    if (driver is! VimModeAware) return;
+    if (!_hasAttemptedLoad) _loadAnalysis();
+    (driver as VimModeAware).vimMode.enterAnalysisMode();
+  }
+
+  /// SCAFFOLD toolbar shown while any page is in analysis-review mode: step
+  /// through chunks (◀ ▶) or open the full panel. The actual chunk highlight /
+  /// scroll is [AnalysisModeController.onFocusChunk] — still a TODO.
+  Widget _analysisModeBar() {
+    return AnimatedBuilder(
+      animation: _editorController,
+      builder: (context, _) {
+        final driver = _editorController.activeController.driver;
+        if (driver is! VimModeAware) return const SizedBox.shrink();
+        final vimMode = (driver as VimModeAware).vimMode;
+        return AnimatedBuilder(
+          animation: vimMode,
+          builder: (context, __) {
+            if (!vimMode.isAnalysis) return const SizedBox.shrink();
+            return AnimatedBuilder(
+              animation: _analysisMode,
+              builder: (context, ___) {
+                final cur = _analysisMode.current;
+                final label = cur == null
+                    ? 'No analysis chunks'
+                    : 'Chunk ${_analysisMode.index + 1} / ${_analysisMode.count}';
+                return Material(
+                  color: Colors.deepPurple,
+                  borderRadius: BorderRadius.circular(24),
+                  elevation: 4,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.chevron_left,
+                              color: Colors.white),
+                          onPressed:
+                              _analysisMode.hasChunks ? _analysisMode.prev : null,
+                        ),
+                        Text(label,
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 12)),
+                        IconButton(
+                          icon: const Icon(Icons.chevron_right,
+                              color: Colors.white),
+                          onPressed:
+                              _analysisMode.hasChunks ? _analysisMode.next : null,
+                        ),
+                        const SizedBox(width: 4),
+                        TextButton(
+                          onPressed: _analysisMode.openFullPanel,
+                          child: const Text('Full analysis',
+                              style: TextStyle(color: Colors.white)),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// The vim NORMAL/INSERT badge (lives in the app bar). Collapses to nothing
+  /// when drawing, for non-vim engines, or when vim is disabled.
+  ///
+  /// Why TWO nested AnimatedBuilders: vim mode is PER-PAGE (each page's driver
+  /// owns its own VimModeController), so the badge has to watch two different
+  /// things. The OUTER one listens to the controller and fires when the ACTIVE
+  /// page changes — that's what re-points the badge at the new page's vimMode
+  /// (a single builder bound to one page's mode would go stale the moment you
+  /// switch pages). The INNER one listens to that resolved vimMode and fires when
+  /// the mode value itself flips (i / Esc). Neither alone is enough.
+  Widget _vimModeBadge() {
+    return AnimatedBuilder(
+      animation: _editorController,
+      builder: (context, _) {
+        final driver = _editorController.activeController.driver;
+        if (_editorController.drawingEnabled || driver is! VimModeAware) {
+          return const SizedBox.shrink();
+        }
+        final vimMode = (driver as VimModeAware).vimMode;
+        return AnimatedBuilder(
+          animation: vimMode,
+          builder: (context, __) {
+            if (!vimMode.isEnabled) return const SizedBox.shrink();
+            final (label, color) = switch (vimMode.value) {
+              VimMode.normal => ('NORMAL', Colors.blueGrey),
+              VimMode.insert => ('INSERT', Colors.teal),
+              VimMode.analysis => ('ANALYSIS', Colors.deepPurple),
+            };
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1,
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _switchEngine(_TextEngine engine) {
     if (engine == _currentEngine) return;
 
@@ -637,6 +876,9 @@ class _EditorScaffoldState extends State<EditorScaffold> {
   void dispose() {
     _editorController.removeListener(_onEditorChanged);
     _editorController.dispose();
+    _partialEraser.dispose();
+    _eraserWidth.dispose();
+    _analysisMode.dispose();
     _debounce?.cancel();
     super.dispose();
   }
@@ -647,6 +889,13 @@ class _EditorScaffoldState extends State<EditorScaffold> {
       appBar: AppBar(
         title: Text(widget.note['title'] ?? 'Edit Note'),
         actions: [
+          // Vim mode indicator, in the app bar (Center → vertically aligned).
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: _vimModeBadge(),
+            ),
+          ),
           if (_isSaving)
             const Padding(
               padding: EdgeInsets.all(12),
@@ -753,6 +1002,9 @@ class _EditorScaffoldState extends State<EditorScaffold> {
                 case 'toggle_vim_mode':
                   setState(_toggleVimMode);
                   break;
+                case 'enter_analysis_mode':
+                  _enterAnalysisMode();
+                  break;
               }
             },
             itemBuilder:
@@ -810,6 +1062,11 @@ class _EditorScaffoldState extends State<EditorScaffold> {
                           : 'Neovim keybindings (unsupported by this engine)',
                     ),
                   ),
+                  PopupMenuItem<String>(
+                    value: 'enter_analysis_mode',
+                    enabled: _vimModeEnabled,
+                    child: const Text('Analysis review mode (vim)'),
+                  ),
                 ],
           ),
         ],
@@ -820,6 +1077,8 @@ class _EditorScaffoldState extends State<EditorScaffold> {
             Positioned.fill(
               child: PagedEditor(
                 controller: _editorController,
+                partialEraser: _partialEraser,
+                eraserWidth: _eraserWidth,
                 // While the analysis panel is open, tapping a block that has
                 // analysis shows its findings inline (see PageSurface). Null
                 // when closed → no popovers during normal editing.
@@ -847,6 +1106,10 @@ class _EditorScaffoldState extends State<EditorScaffold> {
                         _editorController.activeController.drawingNotifier,
                     // Selecting a pen/highlighter/eraser follows across pages.
                     onSelectTool: _editorController.applyDrawingTool,
+                    // Re-tapping the eraser toggles this partial/whole flag.
+                    partialEraser: _partialEraser,
+                    // The size selector sizes the eraser too (shared with pages).
+                    eraserWidth: _eraserWidth,
                   );
                 },
               ),
@@ -976,6 +1239,17 @@ class _EditorScaffoldState extends State<EditorScaffold> {
             // same _save() call — but at rest it now tells you whether
             // there's anything to save at all, instead of always looking
             // like an unpressed button.
+            // SCAFFOLD: analysis-review toolbar (only visible in analysis mode).
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 16,
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: _analysisModeBar(),
+              ),
+            ),
+
             Positioned(
               right: 16,
               bottom: 16,

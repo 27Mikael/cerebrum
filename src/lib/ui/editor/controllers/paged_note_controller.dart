@@ -22,9 +22,43 @@ class NotePage {
   final NoteEditorController controller;
 }
 
-/// A note as an ORDERED LIST OF PAGES (Xournal / Samsung Notes style): each
-/// page is its own text+ink surface, content does NOT flow between pages, and
-/// pages are added explicitly. Maps 1:1 to the daemon's `NoteStorage.pages`.
+/// A note as an ORDERED LIST OF DISCRETE PAGES (Xournal / Samsung-Notes style).
+/// Maps 1:1 to the daemon's `NoteStorage.pages`. This class is where all the
+/// paged BEHAVIOUR lives, so — because that behaviour is deliberately not what a
+/// word processor does — here is why it behaves the way it does:
+///
+///  * **Pages are discrete, not a reflowing document.** Each page owns its own
+///    AppFlowy document + ink layer ([NotePage.controller]). Content does NOT
+///    reflow backward to fill a gap, and editing one page never re-lays-out the
+///    others. Page ids are therefore stable — nothing auto-splits or renumbers
+///    them. (An earlier build DID reflow continuously; it churned page ids into
+///    a sparse mess, jumped the caret at boundaries, and fought the daemon's
+///    stable-`page_id` versioning/analysis/sync. It was removed on purpose.)
+///
+///  * **Content flows FORWARD only, when a page fills.** [PageSurface] measures
+///    the rendered layout and reports overflow; [pushOverflow] then moves the
+///    overflowing tail WHOLE-BLOCK onto the next page (created if needed) and the
+///    caret follows. Whole blocks only — nothing is split — so a table/paragraph
+///    taller than a whole sheet just overflows (see the table TODO). Backspace at
+///    a page's start does the inverse, discretely: [mergePageIntoPrevious] pulls
+///    that page's text up into the previous one.
+///
+///  * **Every page is a SEPARATE editor, so per-page state doesn't carry itself.**
+///    Each page's driver has its own selection AND its own vim mode controller.
+///    Cross-page operations rebuild the affected pages' controllers (a page has
+///    no cheap way to move blocks into another page's live `EditorState`), and a
+///    rebuilt editor starts fresh — which is exactly why [pushOverflow]/merge
+///    have to (a) seed the caret onto exactly ONE page (`seedCaret:false` on the
+///    other, or you get two visible cursors) and (b) copy the vim mode across
+///    (`_applyVimState`, or insert-mode silently drops back to normal). The
+///    controller remount is driven by `ObjectKey(controller)` in PagedEditor.
+///
+///  * **Ink is page-LOCAL and never crosses pages** — merge/overflow move text
+///    only; a page's strokes stay with that page's index.
+///
+///  * **The "active" page is tracked by pointer-down** (PagedEditor's Listener),
+///    because the single screen-level drawing dial + undo/redo act on whichever
+///    page you last touched, not a page-per-dial.
 ///
 /// UNVERIFIED (no flutter tooling in the build env) — run `flutter analyze`.
 class PagedNoteController extends ChangeNotifier {
@@ -150,6 +184,7 @@ class PagedNoteController extends ChangeNotifier {
     int? caretBlockIndex,
     int? caretOffset,
     bool autoFocus = false,
+    bool seedCaret = true,
   }) {
     return NotePage(
       pageId: pageId,
@@ -160,6 +195,7 @@ class PagedNoteController extends ChangeNotifier {
           initialCaretBlockIndex: caretBlockIndex,
           initialCaretOffset: caretOffset,
           autoFocus: autoFocus,
+          seedCaret: seedCaret,
         ),
         initialInkJson: ink,
       ),
@@ -262,31 +298,45 @@ class PagedNoteController extends ChangeNotifier {
     final kept = children.sublist(0, fromBlockIndex);
     final moved = children.sublist(fromBlockIndex);
 
-    // If the caret is on this page in a moved block, it travels to the next page.
-    int? caretBlock;
-    int? caretOffset;
+    // Capture the source page's caret AND vim mode before we tear it down.
+    int? srcCaretBlock;
+    int? srcCaretOffset;
+    bool? wasInsert; // null → source page wasn't the active/vim-aware one
+    var wasVimEnabled = true;
     final driver = page.controller.driver;
     if (_activeIndex == pageIndex && driver is AppFlowyTextDriver) {
       final caret = driver.caret;
-      if (caret != null &&
-          caret.path.length == 1 &&
-          caret.path.first >= fromBlockIndex) {
-        caretBlock = caret.path.first - fromBlockIndex; // index within `moved`
-        caretOffset = caret.offset;
+      if (caret != null && caret.path.length == 1) {
+        srcCaretBlock = caret.path.first;
+        srcCaretOffset = caret.offset;
       }
+      wasInsert = driver.vimMode.isInsert;
+      wasVimEnabled = driver.vimMode.isEnabled;
     }
+    // Does the caret sit in a block that's moving? Then it travels to the next
+    // page; otherwise it stays on this (trimmed) page. Exactly ONE page gets a
+    // caret — the other passes seedCaret:false so no second cursor lingers.
+    final caretMoved = srcCaretBlock != null && srcCaretBlock >= fromBlockIndex;
+    final targetCaretBlock =
+        caretMoved ? srcCaretBlock - fromBlockIndex : null; // index in `moved`
 
-    // Rebuild this page with just the kept blocks (its ink stays).
+    // Rebuild this page with just the kept blocks (its ink stays). It holds the
+    // caret only if the caret stayed here.
     final trimmed = _makePage(
       pageId: page.pageId,
       index: pageIndex,
       document: {'type': 'page', 'children': kept},
       ink: page.controller.inkJson,
+      caretBlockIndex: caretMoved ? null : srcCaretBlock,
+      caretOffset: caretMoved ? null : srcCaretOffset,
+      autoFocus: !caretMoved && srcCaretBlock != null,
+      seedCaret: false,
     );
     page.controller.dispose();
     _pages[pageIndex] = trimmed;
     _initPage(trimmed);
 
+    late final NotePage target;
     if (pageIndex + 1 < _pages.length) {
       // Prepend the moved blocks to the existing next page (may cascade — that
       // page will report its own overflow next frame if it now doesn't fit).
@@ -294,36 +344,63 @@ class PagedNoteController extends ChangeNotifier {
       final nextChildren = List<Map<String, dynamic>>.from(
         (next.controller.documentJson['children'] as List?) ?? const [],
       );
-      final rebuiltNext = _makePage(
+      target = _makePage(
         pageId: next.pageId,
         index: pageIndex + 1,
         document: {'type': 'page', 'children': [...moved, ...nextChildren]},
         ink: next.controller.inkJson,
-        caretBlockIndex: caretBlock,
-        caretOffset: caretOffset,
-        autoFocus: caretBlock != null,
+        caretBlockIndex: targetCaretBlock,
+        caretOffset: caretMoved ? srcCaretOffset : null,
+        autoFocus: caretMoved,
+        seedCaret: false,
       );
       next.controller.dispose();
-      _pages[pageIndex + 1] = rebuiltNext;
-      _initPage(rebuiltNext);
+      _pages[pageIndex + 1] = target;
     } else {
       // Last page overflowed → spill onto a fresh page.
-      final created = _makePage(
+      target = _makePage(
         pageId: _nextPageId(),
         index: pageIndex + 1,
         document: {'type': 'page', 'children': moved},
         ink: null,
-        caretBlockIndex: caretBlock,
-        caretOffset: caretOffset,
-        autoFocus: caretBlock != null,
+        caretBlockIndex: targetCaretBlock,
+        caretOffset: caretMoved ? srcCaretOffset : null,
+        autoFocus: caretMoved,
+        seedCaret: false,
       );
-      _pages.add(created);
-      _initPage(created);
+      _pages.add(target);
+    }
+    _initPage(target);
+
+    // Vim mode is per-page (each driver owns a VimModeController that defaults to
+    // normal), so a rebuild would silently drop you back to normal. Carry the
+    // mode onto both rebuilt pages so typing keeps going in insert across the
+    // page boundary.
+    if (wasInsert != null) {
+      _applyVimState(trimmed, insert: wasInsert, enabled: wasVimEnabled);
+      _applyVimState(target, insert: wasInsert, enabled: wasVimEnabled);
     }
 
-    if (caretBlock != null) _activeIndex = pageIndex + 1;
+    if (caretMoved) _activeIndex = pageIndex + 1;
     _flowing = false;
     notifyListeners();
+  }
+
+  /// Copy vim mode (enabled + normal/insert) onto a rebuilt page's driver, so a
+  /// page rebuild doesn't silently reset the mode to normal.
+  void _applyVimState(
+    NotePage page, {
+    required bool insert,
+    required bool enabled,
+  }) {
+    final d = page.controller.driver;
+    if (d is! AppFlowyTextDriver) return;
+    d.vimMode.setEnabled(enabled);
+    if (insert) {
+      d.vimMode.enterInsertMode();
+    } else {
+      d.vimMode.enterNormalMode();
+    }
   }
 
   /// Backspace at the very start of page [index] pulls only its TYPED CONTENT up

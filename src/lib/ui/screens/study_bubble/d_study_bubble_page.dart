@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cerebrum_app/api/bubbles_api.dart';
+import 'package:cerebrum_app/services/id.dart';
+import 'package:cerebrum_app/services/note_store.dart';
+import 'package:cerebrum_app/services/sync_service.dart';
+import 'package:cerebrum_app/ui/editor/blocks/image/note_image_resolver.dart';
 import 'package:cerebrum_app/ui/editor/editor_scaffold.dart';
 import 'package:cerebrum_app/ui/widgets/editable_title.dart';
 
@@ -51,6 +55,18 @@ class _DStudyBubblePageState extends State<DStudyBubblePage> {
   // an entry in `notes` — go through `_openNote` below instead, which
   // fetches the detail endpoint first.
   Future<void> loadNotes(String bubbleId) async {
+    // 1) Local-first: show whatever we have on disk immediately. Works fully
+    // offline and makes the list appear instantly instead of waiting on the net.
+    final local = await NoteStore.listNotes(bubbleId);
+    if (mounted && local.isNotEmpty) {
+      setState(
+        () =>
+            notes =
+                local.map((n) => {...n, 'bubble_id': bubbleId}).toList(),
+      );
+    }
+
+    // 2) Background-refresh from the daemon when reachable.
     try {
       final data = await BubbleNotesApi.fetchNotes(bubbleId);
 
@@ -66,9 +82,29 @@ class _DStudyBubblePageState extends State<DStudyBubblePage> {
         }
       }
 
-      setState(() => notes = List<Map<String, dynamic>>.from(data));
-    } catch (e) {
+      // Keep local-only notes the server doesn't know about yet (created or
+      // queued while offline) so a refresh can't drop unsynced work.
+      final serverFilenames =
+          data.map((n) => n['filename']).whereType<String>().toSet();
+      final localOnly = local.where(
+        (l) =>
+            l['filename'] == null ||
+            !serverFilenames.contains(l['filename']),
+      );
+
       if (mounted) {
+        setState(
+          () =>
+              notes = [
+                ...localOnly.map((n) => {...n, 'bubble_id': bubbleId}),
+                ...List<Map<String, dynamic>>.from(data),
+              ],
+        );
+      }
+    } catch (e) {
+      // Offline / hub down — the local list already stands in. Only surface an
+      // error if we had nothing local to show.
+      if (mounted && local.isEmpty) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text("$e")));
@@ -84,22 +120,69 @@ class _DStudyBubblePageState extends State<DStudyBubblePage> {
   // `ink: []`. This is the fix for ink not loading when reopening a note.
   Future<void> _openNote(Map<String, dynamic> listNote) async {
     final filename = listNote['filename'] as String?;
-    if (filename == null) return;
+    final noteId =
+        listNote['note_id'] as String? ??
+        (filename != null && filename.endsWith('.json')
+            ? filename.substring(0, filename.length - 5)
+            : filename);
+    if (filename == null && noteId == null) return;
 
-    setState(() => _openingFilename = filename);
+    setState(() => _openingFilename = filename ?? noteId);
 
     try {
-      final fullNote = await BubbleNotesApi.fetchNoteByFileName(
-        bubbleId,
-        filename,
-      );
+      // 1) Local-first read — instant and works offline.
+      Map<String, dynamic>? fullNote =
+          noteId != null ? await NoteStore.readNote(bubbleId, noteId) : null;
+
+      // 2) If online and the note isn't carrying unsynced local edits, prefer
+      // the daemon's copy — it's authoritative and also carries server-only
+      // fields (analysis, etc.). Locally-dirty notes keep the local copy so we
+      // don't clobber a queued edit with a stale server version.
+      final sync =
+          noteId != null
+              ? await NoteStore.readSyncState(bubbleId, noteId)
+              : const <String, dynamic>{'dirty': false};
+      final locallyDirty = sync['dirty'] == true;
+      if (filename != null && (fullNote == null || !locallyDirty)) {
+        try {
+          final remote = await BubbleNotesApi.fetchNoteByFileName(
+            bubbleId,
+            filename,
+          );
+          remote['bubble_id'] = bubbleId;
+          fullNote = remote;
+        } catch (_) {
+          // Offline / hub down — fall back to the local copy (if any).
+        }
+      }
+
+      if (fullNote == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Note isn't available offline yet.")),
+          );
+        }
+        return;
+      }
+
       fullNote['bubble_id'] = bubbleId;
+      if (noteId != null) fullNote['note_id'] ??= noteId;
+
+      // Prime the image resolver before the editor renders so embedded
+      // cerebrum-image:// refs resolve on the first frame.
+      final resolvedId = fullNote['note_id'] as String?;
+      if (resolvedId != null) {
+        await NoteImageResolver.configureForNote(
+          bubbleId: bubbleId,
+          noteId: resolvedId,
+        );
+      }
 
       if (!mounted) return;
 
       await Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => EditorScaffold(note: fullNote)),
+        MaterialPageRoute(builder: (_) => EditorScaffold(note: fullNote!)),
       );
 
       // Reload notes when returning from editor
@@ -120,75 +203,85 @@ class _DStudyBubblePageState extends State<DStudyBubblePage> {
   // -----------------------
   Future<void> addNote() async {
     try {
-      // 1️⃣ Blank AppFlowy document structure
-      final Map<String, dynamic> blankDoc = {
-        "document": {
-          "type": "page",
-          "children": [
-            {
-              "type": "paragraph",
-              "data": {
-                "delta": [
-                  {"insert": ""},
-                ],
-              },
+      // Blank AppFlowy document (one empty paragraph on one page).
+      final Map<String, dynamic> blankDocument = {
+        "type": "page",
+        "children": [
+          {
+            "type": "paragraph",
+            "data": {
+              "delta": [
+                {"insert": ""},
+              ],
             },
-          ],
+          },
+        ],
+      };
+
+      // Client-owned identity (phase 4): the note exists locally the instant
+      // it's created — before the daemon ever sees it — so a note can be created
+      // fully offline. The daemon's createNote then becomes the FIRST PUSH of an
+      // already-local note (SyncService materialises it and back-fills the
+      // server filename).
+      final noteId = Ulid.generate();
+      final pages = <Map<String, dynamic>>[
+        {
+          'page_id': 'p1',
+          'page_index': 0,
+          'document': blankDocument,
+          'ink': <Map<String, dynamic>>[],
         },
-      };
+      ];
 
-      // 2️⃣ Payload for backend - only include fields backend expects
-      final Map<String, dynamic> notePayload = {
-        "title": "Untitled Note",
-        "content": blankDoc,
-        "ink": <Map<String, dynamic>>[],
-      };
-
-      // 3️⃣ Create note in backend with proper type casts
-      final Map<String, dynamic> createdNote = await BubbleNotesApi.createNote(
+      // 1) Persist locally first — always succeeds, offline included.
+      await NoteStore.writeNote(
         bubbleId: bubbleId,
-        title: notePayload['title'] as String,
-        content: notePayload['content'] as Map<String, dynamic>,
-        ink:
-            (notePayload['ink'] as List<dynamic>)
-                .map((e) => e as Map<String, dynamic>)
-                .toList(),
+        noteId: noteId,
+        manifest: {
+          'title': 'Untitled Note',
+          'filename': null,
+          'note_id': noteId,
+          'bubble_id': bubbleId,
+          'analyse_note': true,
+        },
+        pages: pages,
+      );
+      await NoteStore.markDirty(bubbleId, noteId);
+
+      // 2) Best-effort first push (create on the daemon). Queued for retry if
+      // we're offline; on success SyncService back-fills the server filename
+      // into the local manifest.
+      final merged = await SyncService.queueSave(
+        bubbleId: bubbleId,
+        noteId: noteId,
+        title: 'Untitled Note',
+        pages: pages,
+        filename: null,
       );
 
-      // 4️⃣ Build frontend note object
-      // (createNote returns the full note it just wrote, including real
-      // ink — [] here, since it's brand new — so this one's fine as-is;
-      // it's not the ink-stripped list-endpoint shape.)
       final Map<String, dynamic> newNote = {
-        "title": createdNote['title'] as String,
-        "content": createdNote['content'] as Map<String, dynamic>,
-        "ink":
-            (createdNote['ink'] as List<dynamic>)
-                .map((e) => e as Map<String, dynamic>)
-                .toList(),
-        "filename": createdNote['filename'] as String,
+        "title": merged?['title'] ?? 'Untitled Note',
+        "note_id": noteId,
+        "filename": merged?['filename'], // null while still local-only
         "bubble_id": bubbleId,
+        "pages": merged?['pages'] ?? pages,
       };
 
-      // 5️⃣ Insert into local notes list
+      // Show it in the list immediately.
       setState(() {
         notes.insert(0, newNote);
       });
 
-      // 6️⃣ Open editor
+      // Prime the image resolver for the new note before opening the editor.
+      await NoteImageResolver.configureForNote(
+        bubbleId: bubbleId,
+        noteId: noteId,
+      );
+
       if (mounted) {
         Navigator.push(
           context,
-          MaterialPageRoute(
-            builder:
-                (_) => EditorScaffold(
-                  note: newNote,
-                  initialTextJson: newNote['content'],
-                  initialInkJson: List<Map<String, dynamic>>.from(
-                    newNote['ink'],
-                  ),
-                ),
-          ),
+          MaterialPageRoute(builder: (_) => EditorScaffold(note: newNote)),
         ).then((_) {
           // Reload notes after returning from editor
           loadNotes(bubbleId);
@@ -226,17 +319,36 @@ class _DStudyBubblePageState extends State<DStudyBubblePage> {
   // -----------------------
   // Delete note
   // -----------------------
-  Future<void> deleteNote(String bubbleId, String filename) async {
-    try {
-      await BubbleNotesApi.deleteNote(bubbleId, filename);
-      await loadNotes(bubbleId);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text("$e")));
-      }
+  Future<void> deleteNote(
+    String bubbleId,
+    String? filename, {
+    String? noteId,
+  }) async {
+    final localId =
+        noteId ??
+        (filename != null && filename.endsWith('.json')
+            ? filename.substring(0, filename.length - 5)
+            : filename);
+
+    // Tombstone locally first so the row disappears immediately and a background
+    // refresh can't resurrect it — offline included.
+    if (localId != null) await NoteStore.markDeleted(bubbleId, localId);
+
+    if (filename != null && localId != null) {
+      // Exists on the server → queue the delete. It runs now if the daemon is
+      // reachable, else on the next drain (start/resume/reconnect); the local
+      // folder is purged once the daemon confirms.
+      await SyncService.queueDelete(
+        bubbleId: bubbleId,
+        noteId: localId,
+        filename: filename,
+      );
+    } else if (localId != null) {
+      // Local-only note (never pushed) → nothing on the server; just drop it.
+      await NoteStore.purge(bubbleId, localId);
     }
+
+    await loadNotes(bubbleId);
   }
 
   // -----------------------
@@ -245,11 +357,15 @@ class _DStudyBubblePageState extends State<DStudyBubblePage> {
   Future<void> createBubble() async {
     setState(() => isLoading = true);
     try {
+      final name = nameCtrl.text.trim();
       final result = await BubblesApi.createBubble(
-        name: nameCtrl.text.trim(),
+        name: name,
         description: descCtrl.text.trim(),
         domains: [],
         userGoals: [],
+        // md5-of-name (matches the daemon fallback), kept distinct from the
+        // ULID note ids. Hash the exact string we send as `name`.
+        bubbleId: bubbleIdFromName(name),
       );
       if (mounted) {
         Navigator.pop(context, result);
@@ -326,10 +442,11 @@ class _DStudyBubblePageState extends State<DStudyBubblePage> {
                   }
 
                   final note = notes[index - 1];
-                  final isOpening = _openingFilename == note['filename'];
+                  final noteKey = note['filename'] ?? note['note_id'];
+                  final isOpening = _openingFilename == noteKey;
 
                   return ListTile(
-                    key: ValueKey(note["filename"]),
+                    key: ValueKey(noteKey),
                     title: EditableTitle(
                       initialTitle: note['title'] ?? 'Untitled',
                       onTitleChanged: (newTitle) async {
@@ -400,7 +517,11 @@ class _DStudyBubblePageState extends State<DStudyBubblePage> {
                                 );
 
                                 if (confirm == true) {
-                                  await deleteNote(bubbleId, note["filename"]);
+                                  await deleteNote(
+                                    bubbleId,
+                                    note["filename"] as String?,
+                                    noteId: note["note_id"] as String?,
+                                  );
                                 }
                               },
                             ),

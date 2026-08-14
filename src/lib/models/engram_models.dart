@@ -1,3 +1,17 @@
+// ══ CROSS-REPO CONTRACT: engram models ⇄ daemon engram content dataclasses ══
+// These mirror the daemon's Engram/*.content shapes (see daemon
+// cerebrum_core/engrams/core/types.py). Field JSON keys must match.
+//
+//  • Answer-bearing fields (McqContent.correctOption, ShortQuestionItem
+//    .expectedAnswer, LongQuestionContent.answer, LongQuestionPart.markScheme)
+//    are STRIPPED by the daemon's `_sanitize_for_presentation` in the default
+//    student view — they arrive only when fetched with include_answers=true.
+//    Nullable on purpose; the client reveals them only after an answer.
+//  • ShortQuestionItem.questionNumber is the identity the daemon matches
+//    submitted `question_index` against (ai_grading.questions_by_index =
+//    {q.question_number: q}). Submit MUST send question_index == questionNumber
+//    or the answer is dropped/scored 0. See learning_center_api.submitShortQuestion.
+// ════════════════════════════════════════════════════════════════════════════
 enum EngramType { mcq, flashcard, shortQuestion, longQuestion, unknown }
 
 EngramType _parseEngramType(String raw) {
@@ -24,12 +38,23 @@ class McqContent extends EngramContent {
   final Map<String, String> options; // {"A": "...", "B": "...", ...}
   final String severity;
 
+  /// The correct option key (e.g. "B"). Normally **absent**: the daemon
+  /// deliberately strips `correct_option` from student-facing payloads
+  /// (`_sanitize_for_presentation`) so answers can't be scraped — it's only
+  /// present in the review/admin view (`list?include_answers=true`). So offline
+  /// MCQ grading generally can't happen by design; MCQ scoring defers to the
+  /// server (queue offline → score on reconnect). This field only enables local
+  /// grading in the answers-included case. Nullable → absence degrades to the
+  /// server path.
+  final String? correctOption;
+
   McqContent({
     required this.findingIndex,
     required this.questionNumber,
     required this.stem,
     required this.options,
     required this.severity,
+    this.correctOption,
   });
 
   factory McqContent.fromJson(Map<String, dynamic> json) => McqContent(
@@ -38,6 +63,10 @@ class McqContent extends EngramContent {
     stem: json['stem'] as String,
     options: Map<String, String>.from(json['options'] as Map),
     severity: json['severity'] as String,
+    correctOption:
+        json['correct_option'] as String? ??
+        json['answer'] as String? ??
+        json['correct'] as String?,
   );
 }
 
@@ -81,6 +110,11 @@ class ShortQuestionItem {
   final bool contextAnchored;
   final String severity;
 
+  /// Model answer for side-by-side comparison. Present only when engrams are
+  /// fetched with answers (offline study pack); the daemon strips it from the
+  /// default student view. Revealed by the client only AFTER the student submits.
+  final String? expectedAnswer;
+
   ShortQuestionItem({
     required this.findingIndex,
     required this.questionNumber,
@@ -89,6 +123,7 @@ class ShortQuestionItem {
     this.hint,
     required this.contextAnchored,
     required this.severity,
+    this.expectedAnswer,
   });
 
   factory ShortQuestionItem.fromJson(Map<String, dynamic> json) =>
@@ -100,6 +135,7 @@ class ShortQuestionItem {
         hint: json['hint'] as String?,
         contextAnchored: json['context_anchored'] as bool,
         severity: json['severity'] as String,
+        expectedAnswer: json['expected_answer'] as String?,
       );
 }
 
@@ -126,12 +162,17 @@ class LongQuestionPart {
   final int marks;
   final String? note;
 
+  /// Per-part mark scheme — present only in the answers-included fetch; revealed
+  /// after submit for self-comparison. Stripped from the default student view.
+  final String? markScheme;
+
   LongQuestionPart({
     required this.part,
     required this.level,
     required this.question,
     required this.marks,
     this.note,
+    this.markScheme,
   });
 
   factory LongQuestionPart.fromJson(Map<String, dynamic> json) =>
@@ -141,6 +182,7 @@ class LongQuestionPart {
         question: json['question'] as String,
         marks: json['marks'] as int,
         note: json['note'] as String?,
+        markScheme: json['mark_scheme'] as String?,
       );
 }
 
@@ -150,11 +192,16 @@ class LongQuestionContent extends EngramContent {
   final String severity;
   final int totalMarks;
 
+  /// Overall model answer — present only in the answers-included fetch; revealed
+  /// after submit. Stripped from the default student view.
+  final String? answer;
+
   LongQuestionContent({
     required this.questionStem,
     required this.parts,
     required this.severity,
     required this.totalMarks,
+    this.answer,
   });
 
   factory LongQuestionContent.fromJson(Map<String, dynamic> json) =>
@@ -168,6 +215,7 @@ class LongQuestionContent extends EngramContent {
                 .toList(),
         severity: json['severity'] as String,
         totalMarks: json['total_marks'] as int,
+        answer: json['answer'] as String?,
       );
 }
 

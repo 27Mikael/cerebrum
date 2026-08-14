@@ -24,17 +24,40 @@ class UpcomingEngramsSection extends StatefulWidget {
   State<UpcomingEngramsSection> createState() => _UpcomingEngramsSectionState();
 }
 
-class _UpcomingEngramsSectionState extends State<UpcomingEngramsSection> {
-  bool _loading = true;
+class _UpcomingEngramsSectionState extends State<UpcomingEngramsSection>
+    with WidgetsBindingObserver {
+  bool _loading = true; // only true until the FIRST fetch resolves
+  bool _fetching = false; // guards against overlapping fetches
   List<DaySchedule> _days = const [];
 
   @override
   void initState() {
     super.initState();
+    // Re-fetch when the app returns to the foreground (engrams may have been
+    // generated while we were away). Navigating back to the home tab already
+    // rebuilds this widget, so that path re-fetches on its own.
+    WidgetsBinding.instance.addObserver(this);
     _loadEngrams();
   }
 
-  Future<void> _loadEngrams() async {
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _loadEngrams(background: true);
+  }
+
+  /// Fetches the upcoming engrams. A [background] refresh keeps the current
+  /// cards visible (no spinner, no blanking) and, on failure, leaves whatever
+  /// was already shown — so the section quietly appears/updates when engrams
+  /// arrive and disappears (shrinks) when there are none.
+  Future<void> _loadEngrams({bool background = false}) async {
+    if (_fetching) return;
+    _fetching = true;
     try {
       final response = await LearningCenterApi.listEngrams(
         bubbleId: "1edae102638a8cd7882e6de1c1e9639e",
@@ -44,21 +67,32 @@ class _UpcomingEngramsSectionState extends State<UpcomingEngramsSection> {
 
       if (!mounted) return;
 
-      final items = response.engrams.map(_mapEngram).toList();
+      // PLACEHOLDER scheduling: the API doesn't return due times yet, so we
+      // synthesize an ascending hour per engram just so the time column renders
+      // like the design. TODO: group by real due date + show the real hour once
+      // the backend supplies it (then drop the `slotHour` argument below).
+      final items = [
+        for (var i = 0; i < response.engrams.length; i++)
+          _mapEngram(response.engrams[i], slotHour: 9 + i),
+      ];
 
-      // TODO: once due-date data is available, group by actual due date
-      // instead of dumping everything under "today".
       setState(() {
-        _days = [DaySchedule(date: DateTime.now(), items: items)];
+        _days = items.isEmpty
+            ? const []
+            : [DaySchedule(date: DateTime.now(), items: items)];
         _loading = false;
       });
     } catch (_) {
       if (!mounted) return;
-      setState(() => _loading = false);
+      // On a background refresh keep whatever we had; only the first load
+      // resolves the spinner on failure.
+      if (!background) setState(() => _loading = false);
+    } finally {
+      _fetching = false;
     }
   }
 
-  EngramItem _mapEngram(Engram e) {
+  EngramItem _mapEngram(Engram e, {required int slotHour}) {
     final title = switch (e.type) {
       EngramType.mcq => "MCQ",
       EngramType.flashcard => "Flashcard",
@@ -67,14 +101,22 @@ class _UpcomingEngramsSectionState extends State<UpcomingEngramsSection> {
       EngramType.unknown => "Engram",
     };
 
-    return EngramItem(title: title, time: "", engramId: e.id);
+    return EngramItem(title: title, time: _formatHour(slotHour), engramId: e.id);
+  }
+
+  /// 24h hour → "9 am" / "1 pm" (placeholder until real schedule data lands).
+  static String _formatHour(int hour24) {
+    final h = hour24 % 24;
+    final period = h < 12 ? 'am' : 'pm';
+    final display = h % 12 == 0 ? 12 : h % 12;
+    return '$display $period';
   }
 
   @override
   Widget build(BuildContext context) {
     if (_loading) {
       return const SizedBox(
-        height: 130,
+        height: 150,
         child: Center(child: CircularProgressIndicator()),
       );
     }
@@ -93,11 +135,17 @@ class _UpcomingEngramsSectionState extends State<UpcomingEngramsSection> {
 }
 
 /// Stacks one DayEngramsCard per day, cycling through the accent palette.
+///
+/// A shrink-wrapping [ListView] inside a [ConstrainedBox]: it sizes to its
+/// content up to [_maxHeight] and then scrolls, so it can never overflow its
+/// parent no matter how many days there are or how the window is scaled.
 class UpcomingEngramsList extends StatelessWidget {
   final List<DaySchedule> days;
   final ValueChanged<EngramItem>? onTapEngram;
 
   const UpcomingEngramsList({super.key, required this.days, this.onTapEngram});
+
+  static const double _maxHeight = 340;
 
   static const _palette = [
     Color(0xffB8AFD1), // lavender
@@ -107,18 +155,20 @@ class UpcomingEngramsList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: List.generate(days.length, (i) {
-        return Padding(
-          padding: EdgeInsets.only(bottom: i == days.length - 1 ? 0 : 12),
-          child: DayEngramsCard(
-            date: days[i].date,
-            items: days[i].items,
-            color: _palette[i % _palette.length],
-            onTapEngram: onTapEngram,
-          ),
-        );
-      }),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: _maxHeight),
+      child: ListView.separated(
+        shrinkWrap: true,
+        padding: EdgeInsets.zero,
+        itemCount: days.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 12),
+        itemBuilder: (context, i) => DayEngramsCard(
+          date: days[i].date,
+          items: days[i].items,
+          color: _palette[i % _palette.length],
+          onTapEngram: onTapEngram,
+        ),
+      ),
     );
   }
 }
@@ -140,98 +190,114 @@ class DayEngramsCard extends StatelessWidget {
   static const _days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
   static const _months = [
-    "JAN",
-    "FEB",
-    "MAR",
-    "APR",
-    "MAY",
-    "JUN",
-    "JUL",
-    "AUG",
-    "SEP",
-    "OCT",
-    "NOV",
-    "DEC",
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
   ];
+
+  static const _ink = Color(0xff2F2940);
 
   @override
   Widget build(BuildContext context) {
+    // Chip colour = a darkened shade of the card colour (matches the design).
+    final chipColor = Color.lerp(color, Colors.black, 0.5)!;
+
     return Container(
-      width:
-          double
-              .infinity, // fills available width — no horizontal scroll needed
+      width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       decoration: BoxDecoration(
         color: color,
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 82,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _days[date.weekday - 1],
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Color(0xff2F2940),
+      // IntrinsicHeight + stretch: the row sizes to its tallest column and the
+      // slot dividers span the full height — no fixed heights to overflow.
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              width: 82,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _days[date.weekday - 1],
+                    style: const TextStyle(fontSize: 12, color: _ink),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  "${date.day}",
-                  style: const TextStyle(
-                    fontSize: 40,
-                    fontWeight: FontWeight.bold,
-                    height: .9,
-                    color: Color(0xff2F2940),
+                  const SizedBox(height: 4),
+                  Text(
+                    "${date.day}",
+                    style: const TextStyle(
+                      fontSize: 40,
+                      fontWeight: FontWeight.bold,
+                      height: .9,
+                      color: _ink,
+                    ),
                   ),
-                ),
-                Text(
-                  _months[date.month - 1],
-                  style: const TextStyle(
-                    fontSize: 15,
-                    color: Color(0xff2F2940),
+                  Text(
+                    _months[date.month - 1],
+                    style: const TextStyle(fontSize: 15, color: _ink),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          // Slots stretch to fill remaining width — no fixed width, no scroll.
-          Expanded(
-            child:
-                items.isEmpty
-                    ? const SizedBox(height: 86)
-                    : Row(
-                      children: List.generate(items.length, (i) {
-                        return Expanded(
-                          child: Container(
-                            decoration: BoxDecoration(
-                              border: Border(
-                                left: BorderSide(
-                                  color: Colors.black.withOpacity(
-                                    0.28,
-                                  ), // bolder divider
-                                  width: 1.5,
-                                ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: items.isEmpty
+                  ? const _EmptySlots()
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (var i = 0; i < items.length; i++)
+                          Expanded(
+                            child: Container(
+                              // No leading line on the first slot (it hugs the
+                              // date); a divider before every other slot.
+                              decoration: i == 0
+                                  ? null
+                                  : BoxDecoration(
+                                      border: Border(
+                                        left: BorderSide(
+                                          color: Colors.black
+                                              .withValues(alpha: 0.28),
+                                          width: 1.5,
+                                        ),
+                                      ),
+                                    ),
+                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                              child: EngramColumn(
+                                item: items[i],
+                                chipColor: chipColor,
+                                onTap: () => onTapEngram?.call(items[i]),
                               ),
                             ),
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            child: EngramColumn(
-                              item: items[i],
-                              highlighted: i == 0,
-                              onTap: () => onTapEngram?.call(items[i]),
-                            ),
                           ),
-                        );
-                      }),
+                      ],
                     ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Placeholder shown on a day with no engrams (keeps the card a sensible size).
+class _EmptySlots extends StatelessWidget {
+  const _EmptySlots();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      height: 90,
+      child: Center(
+        child: Text(
+          'No engrams scheduled',
+          style: TextStyle(
+            fontSize: 12,
+            color: Color(0xff2F2940),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -239,61 +305,54 @@ class DayEngramsCard extends StatelessWidget {
 
 class EngramColumn extends StatelessWidget {
   final EngramItem item;
-  final bool highlighted;
+  final Color chipColor;
   final VoidCallback? onTap;
 
   const EngramColumn({
     super.key,
     required this.item,
-    required this.highlighted,
+    required this.chipColor,
     this.onTap,
   });
 
+  static const _ink = Color(0xff2F2940);
+
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 86,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            item.time ?? '',
-            style: const TextStyle(fontSize: 10, color: Color(0xff2F2940)),
+    final time = item.time ?? '';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Hour symbol for when this engram is scheduled.
+        Text(
+          time,
+          style: const TextStyle(fontSize: 10, color: _ink),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 10),
+        // Every engram shows its chip (previously only the first did).
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: chipColor,
+            borderRadius: BorderRadius.circular(6),
           ),
-          const SizedBox(height: 10),
-          SizedBox(
-            height: 22,
-            child:
-                highlighted
-                    ? Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xff4B4068),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        item.title,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 9,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    )
-                    : const SizedBox(),
+          alignment: Alignment.center,
+          child: Text(
+            item.title,
+            style: const TextStyle(color: Colors.white, fontSize: 9),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
-          const Spacer(),
-          InkWell(
-            onTap: onTap,
-            child: const Icon(
-              Icons.add_circle_outline,
-              size: 18,
-              color: Color(0xff2F2940),
-            ),
-          ),
-        ],
-      ),
+        ),
+        const Spacer(),
+        const SizedBox(height: 8),
+        InkWell(
+          onTap: onTap,
+          child: const Icon(Icons.add_circle_outline, size: 18, color: _ink),
+        ),
+      ],
     );
   }
 }

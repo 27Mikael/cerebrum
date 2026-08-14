@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:cerebrum_app/ui/editor/controllers/paged_note_controller.dart';
 import 'package:cerebrum_app/ui/editor/screens/page_surface.dart';
@@ -24,6 +25,8 @@ class PagedEditor extends StatefulWidget {
     super.key,
     required this.controller,
     this.analysisForBlock,
+    this.partialEraser,
+    this.eraserWidth,
   });
 
   final PagedNoteController controller;
@@ -31,6 +34,12 @@ class PagedEditor extends StatefulWidget {
   /// When non-null, each page shows an inline analysis popover for blocks this
   /// resolves to findings for (analysis-review mode). Null → no popovers.
   final BlockAnalysisLookup? analysisForBlock;
+
+  /// Eraser mode (partial vs whole-stroke), forwarded to each page's ink layer.
+  final ValueNotifier<bool>? partialEraser;
+
+  /// Eraser diameter (logical px), forwarded to each page's ink layer.
+  final ValueListenable<double>? eraserWidth;
 
   @override
   State<PagedEditor> createState() => _PagedEditorState();
@@ -71,9 +80,12 @@ class _PagedEditorState extends State<PagedEditor> {
               onPointerDown: (_) => c.setActive(i),
               // Key by controller identity: pages keep the same element across
               // normal rebuilds (preserving editor/scroll state), but a page
-              // whose controller was replaced — e.g. the freshly-merged page
-              // after a backspace-merge — gets a new key and REMOUNTS, so its
-              // `autoFocus` fires and the caret lands at the merge seam.
+              // whose controller was REPLACED — the backspace-merge seam, or the
+              // two pages an overflow flow rebuilds — gets a new key and remounts,
+              // so its `autoFocus` fires and the caret lands where it was seeded.
+              // This remount is the whole mechanism behind cross-page focus/caret
+              // hand-off; it's also why those paths must seed the caret onto
+              // exactly one page (see PagedNoteController.pushOverflow).
               child: PageSurface(
                 key: ObjectKey(pages[i].controller),
                 controller: pages[i].controller,
@@ -81,6 +93,8 @@ class _PagedEditorState extends State<PagedEditor> {
                 pageNumber: i + 1,
                 pageId: pages[i].pageId,
                 analysisForBlock: widget.analysisForBlock,
+                partialEraser: widget.partialEraser,
+                eraserWidth: widget.eraserWidth,
                 // When this page's content spills past the sheet, move the
                 // overflowing tail (from block `fromIndex`) onto the next page.
                 onOverflow: (fromIndex) => c.pushOverflow(i, fromIndex),

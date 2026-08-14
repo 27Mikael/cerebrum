@@ -11,6 +11,7 @@ import 'package:cerebrum_app/ui/editor/controllers/text_editing_driver.dart';
 // features/editor/blocks/code_block/code_block_component.dart; adjust
 // to wherever you actually put the file.
 import 'package:cerebrum_app/ui/editor/blocks/code_block/code_block_component.dart';
+import 'package:cerebrum_app/ui/editor/blocks/ai_block/ai_block_component.dart';
 
 /// AppFlowy-backed [TextEditingDriver]. This is the only file that should
 /// import `appflowy_editor` — everything above it (NoteEditorController,
@@ -22,12 +23,14 @@ class AppFlowyTextDriver extends ChangeNotifier
     int? initialCaretBlockIndex,
     int? initialCaretOffset,
     bool autoFocus = false,
+    bool seedCaret = true,
   }) {
     _autoFocus = autoFocus;
     _editorState = _buildEditorState(
       initialDocumentJson,
       initialCaretBlockIndex,
       initialCaretOffset,
+      seedCaret,
     );
     // shrinkWrap: true → AppFlowyEditor lays the document out as a Column with
     // NO internal scroll view. Required when the editor is embedded inside
@@ -83,8 +86,8 @@ class AppFlowyTextDriver extends ChangeNotifier
   /// The current collapsed caret as `(path, offset)`, or null when there's no
   /// selection or it's a range. `path` is the block path (length 1 for a
   /// top-level block; longer when nested, e.g. inside a table cell). Used by
-  /// [PagedNoteController] to snapshot the caret before a reflow so it can be
-  /// re-seeded afterwards.
+  /// [PagedNoteController] to snapshot the caret before an overflow/merge rebuild
+  /// (which disposes this editor) so it can be re-seeded onto the rebuilt page.
   ({List<int> path, int offset})? get caret {
     final sel = _editorState.selection;
     if (sel == null || !sel.isCollapsed) return null;
@@ -178,6 +181,8 @@ class AppFlowyTextDriver extends ChangeNotifier
   late final Map<String, BlockComponentBuilder> _blockComponentBuilders = {
     ...standardBlockComponentBuilderMap,
     kCodeBlockType: CodeBlockComponentBuilder(),
+    // SCAFFOLD: inline AI-feedback block (read-only, generation is a TODO).
+    kAiBlockType: AiBlockComponentBuilder(),
   };
 
   late final List<SelectionMenuItem> _slashMenuItems = [
@@ -187,6 +192,7 @@ class AppFlowyTextDriver extends ChangeNotifier
     _headingMenuItem(6),
     _codeBlockMenuItem(),
     _imageMenuItem(),
+    _aiBlockMenuItem(),
   ];
 
   /// "/image" → pick an image file, upload it via [imageUploader], and drop an
@@ -280,6 +286,37 @@ class AppFlowyTextDriver extends ChangeNotifier
               ..afterSelection = Selection.collapsed(
                 Position(path: path, offset: selection.start.offset),
               );
+        editorState.apply(transaction);
+      },
+    );
+  }
+
+  /// "/ai" → drop a read-only AI-feedback block where the caret is (SCAFFOLD;
+  /// generation is wired inside the block itself, currently a stub).
+  static SelectionMenuItem _aiBlockMenuItem() {
+    return SelectionMenuItem(
+      getName: () => 'AI feedback',
+      icon: (editorState, isSelected, style) => SelectionMenuIconWidget(
+        icon: Icons.auto_awesome,
+        isSelected: isSelected,
+        style: style,
+      ),
+      keywords: ['ai', 'feedback', 'assistant', 'gpt'],
+      handler: (editorState, menuService, context) {
+        final selection = editorState.selection;
+        if (selection == null || !selection.isCollapsed) return;
+        final path = selection.start.path;
+        final node = editorState.getNodeAtPath(path);
+        if (node == null) return;
+        final hasText = (node.delta?.toPlainText().trim().isNotEmpty) ?? false;
+        final transaction = editorState.transaction;
+        if (hasText) {
+          transaction.insertNode(path.next, aiBlockNode());
+        } else {
+          transaction
+            ..insertNode(path, aiBlockNode())
+            ..deleteNode(node);
+        }
         editorState.apply(transaction);
       },
     );
@@ -439,6 +476,7 @@ class AppFlowyTextDriver extends ChangeNotifier
     Map<String, dynamic>? initial, [
     int? caretBlockIndex,
     int? caretOffset,
+    bool seedCaret = true,
   ]) {
     final docJson = initial ?? _emptyDocument;
     final state = _constructEditorState(docJson);
@@ -462,13 +500,19 @@ class AppFlowyTextDriver extends ChangeNotifier
       return state;
     }
 
-    final lastNode = state.document.last;
-    if (lastNode != null) {
-      final offset = lastNode.delta?.length ?? 0;
-      state.updateSelectionWithReason(
-        Selection.collapsed(Position(path: lastNode.path, offset: offset)),
-        reason: SelectionUpdateReason.uiEvent,
-      );
+    // No explicit caret target. Seed the default end-of-line caret ONLY when
+    // asked — a page that shouldn't hold the cursor (e.g. the source page after
+    // an overflow flow moved the caret to the next page) passes seedCaret:false
+    // so it doesn't render a second, lingering cursor.
+    if (seedCaret) {
+      final lastNode = state.document.last;
+      if (lastNode != null) {
+        final offset = lastNode.delta?.length ?? 0;
+        state.updateSelectionWithReason(
+          Selection.collapsed(Position(path: lastNode.path, offset: offset)),
+          reason: SelectionUpdateReason.uiEvent,
+        );
+      }
     }
 
     return state;

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:cerebrum_app/ui/editor/controllers/note_editor_controller.dart';
 import 'package:cerebrum_app/ui/editor/controllers/appflowy_text_driver.dart';
@@ -12,13 +13,31 @@ import 'package:cerebrum_app/ui/editor/screens/paged_editor.dart'
 /// Ink is naturally page-LOCAL: each page has its own bounded scribble widget,
 /// so strokes are relative to this sheet, not a global surface.
 ///
+/// **Why the overflow detection lives HERE, not in the controller.** The
+/// controller decides *what* to move on overflow ([PagedNoteController.pushOverflow]),
+/// but it can't tell *whether* the page overflows — that's a rendered-layout
+/// question, and only the widget can see the layout. So this widget measures each
+/// block's on-screen rect against the sheet's bottom edge and reports the first
+/// block that spills over (via [onOverflow]). The measurement runs in a
+/// post-frame callback (a block's rect only exists after layout) and is coalesced
+/// to once per frame (typing fires many notifications). Because a rebuild remounts
+/// this widget (`ObjectKey(controller)`), the check re-runs on the new page and
+/// naturally *cascades* forward until every page fits.
+///
+/// **Why the sheet is fixed-height even though content can exceed it.** Keeping
+/// the A4 `AspectRatio` is what makes "the page fills → spill forward" meaningful;
+/// the alternative (let the sheet grow) isn't a paged model. Overflow beyond the
+/// sheet is transient — it's detected and pushed to the next page next frame.
+///
 /// In analysis-review mode ([analysisForBlock] non-null), the caret landing in a
 /// block that has analysis tints the block and shows an inline popover of its
-/// findings, anchored to the block. Block identity is POSITIONAL (the block's
-/// index in the page) — see the daemon's `blk{i}` refs.
+/// findings, anchored to the block. Chunks are looked up by the block's STABLE id
+/// (`selectedBlockId`), which round-trips save/load, so the mapping survives
+/// edits/reorders; the block index is kept only to position the highlight rect.
 ///
-/// UNVERIFIED (no device run here) — the analysis overlay geometry
-/// (globalToLocal, popover placement) needs a smoke test on a real page.
+/// UNVERIFIED (no device run here) — the overflow measurement and the analysis
+/// overlay geometry (globalToLocal, popover placement) need a smoke test on a
+/// real page.
 class PageSurface extends StatefulWidget {
   const PageSurface({
     super.key,
@@ -28,11 +47,20 @@ class PageSurface extends StatefulWidget {
     this.pageId,
     this.analysisForBlock,
     this.onOverflow,
+    this.partialEraser,
+    this.eraserWidth,
     this.aspectRatio = 1 / 1.414, // A4 portrait
   });
 
   final NoteEditorController controller;
   final bool drawingEnabled;
+
+  /// Eraser mode (partial vs whole-stroke), forwarded to this page's ink layer.
+  final ValueNotifier<bool>? partialEraser;
+
+  /// Eraser diameter (logical px), forwarded to this page's ink layer.
+  final ValueListenable<double>? eraserWidth;
+
   final int? pageNumber;
   final String? pageId;
   final BlockAnalysisLookup? analysisForBlock;
@@ -204,6 +232,8 @@ class _PageSurfaceState extends State<PageSurface> {
                       ignoring: !widget.drawingEnabled,
                       child: NoteDrawingLayer(
                         notifier: widget.controller.drawingNotifier,
+                        partialEraser: widget.partialEraser,
+                        eraserWidth: widget.eraserWidth,
                       ),
                     ),
                     if (widget.pageNumber != null)

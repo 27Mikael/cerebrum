@@ -2,6 +2,33 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'api_config.dart';
 
+// ══ CROSS-REPO CONTRACT: notes/bubbles API ⇄ daemon routes_bubble.py ════════
+// Every method here is paired with a route in the daemon's routes_bubble.py.
+// The offline-first client (NoteStore + SyncService) is built ON these shapes:
+//
+//  • createBubble → POST /bubbles/create?bubble_id=…  — bubble_id is a REQUIRED
+//    query param (client mints md5(name), matching the daemon's own fallback
+//    `hashlib.md5(name).hexdigest()`); omit it and the daemon 422s. Identity is
+//    derived from the DEPENDENCY user, not the body — never put user_id in the
+//    body (CreateStudyBubble must not require it).  [daemon: create_study_bubble]
+//  • createNote → POST /{bubble_id}/create/notes  — pass note_id (client ULID);
+//    the daemon uses it verbatim so the server filename is `<note_id>.json`,
+//    aligning the on-device folder key with the server filename. Drop it and
+//    identity churns.  [daemon: create_note]
+//  • updateNote → PUT /{bubble_id}/notes/update/{filename}  — sends the WHOLE
+//    page set; the daemon reconciles per `page_id` (edit/add/DELETE) with LWW.
+//    Sending a partial set deletes the omitted pages. `page_id`s must be stable
+//    (see paged_note_controller — they are NOT ULIDs on purpose; the daemon's
+//    per-page analysis keys on them).  [daemon: update_note]
+//  • fetchNotes → GET /{bubble_id}/notes  — returns 404 for an empty bubble;
+//    the client maps 404 → [] (empty state, not an error). List responses carry
+//    `ink: []` deliberately — never build the editor straight from a list entry.
+//  • uploadNoteImage → POST /{bubble_id}/notes/{filename}/images  — returns an
+//    ABSOLUTE url. The client does NOT embed that url; it stores bytes locally +
+//    a `cerebrum-image://` ref (see note_image_resolver). Changing the ref
+//    scheme or the daemon's image route breaks offline image render.
+// ════════════════════════════════════════════════════════════════════════════
+
 class BubblesApi {
   static String get baseUrl => ApiConfig.baseUrl;
   static String get bubblesEndpoint => "$baseUrl/bubbles";
@@ -26,12 +53,16 @@ class BubblesApi {
     throw Exception("Bubble not found");
   }
 
-  // Create bubble  (matches CreateStudyBubble model)
+  // Create bubble  (matches CreateStudyBubble model). [bubbleId] is a
+  // client-minted id sent as the `bubble_id` query param the daemon expects — it
+  // names the bubble folder that note-id folders live under, so the client owns
+  // bubble identity too (and it can be created with a stable id offline).
   static Future<Map<String, dynamic>> createBubble({
     required String name,
     required String description,
     required List<String> domains,
     required List<String> userGoals,
+    required String bubbleId,
   }) async {
     final bubbleData = {
       "name": name,
@@ -41,7 +72,9 @@ class BubblesApi {
     };
 
     final response = await http.post(
-      Uri.parse("$bubblesEndpoint/create"),
+      Uri.parse("$bubblesEndpoint/create").replace(
+        queryParameters: {"bubble_id": bubbleId},
+      ),
       headers: await ApiConfig.headers(),
       body: jsonEncode(bubbleData),
     );
@@ -49,7 +82,9 @@ class BubblesApi {
     if (response.statusCode == 200 || response.statusCode == 201) {
       return jsonDecode(response.body);
     }
-    throw Exception("Failed to create bubble");
+    throw Exception(
+      "Failed to create bubble: ${response.statusCode} - ${response.body}",
+    );
   }
 
   // Delete bubble
@@ -114,6 +149,11 @@ class BubbleNotesApi {
       }).toList();
     }
 
+    // A bubble with no notes yet (empty / missing notes dir) returns 404 — that's
+    // "no notes", not a failure. Return an empty list so the notes screen shows
+    // its empty state instead of an error.
+    if (response.statusCode == 404) return [];
+
     throw Exception("Failed to fetch notes: ${response.statusCode}");
   }
 
@@ -155,14 +195,23 @@ class BubbleNotesApi {
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
-  // Create note
+  // Create note. Pass [noteId] to hand the daemon a client-minted id — it uses
+  // it verbatim (filename becomes `<noteId>.json`), so the client owns identity
+  // end-to-end and the local folder / server filename stay aligned. Omit it and
+  // the daemon mints its own ULID.
   static Future<Map<String, dynamic>> createNote({
     required String bubbleId,
     required String title,
     required Map<String, dynamic> content,
     List<Map<String, dynamic>>? ink,
+    String? noteId,
   }) async {
-    final note = {"title": title, "content": content, "ink": ink ?? []};
+    final note = {
+      "title": title,
+      "content": content,
+      "ink": ink ?? [],
+      if (noteId != null) "note_id": noteId,
+    };
 
     final response = await http.post(
       Uri.parse("${notesEndpoint(bubbleId)}/create/notes"),

@@ -20,8 +20,9 @@ class _DHomescreenState extends State<DHomescreen> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            SizedBox(
-              height: 130,
+            // No fixed height: the section sizes to its content and scrolls
+            // internally past its own cap, so it never overflows on resize.
+            const SizedBox(
               width: double.infinity,
               child: UpcomingEngramsSection(),
             ),

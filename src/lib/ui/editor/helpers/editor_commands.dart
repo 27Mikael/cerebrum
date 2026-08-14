@@ -259,7 +259,7 @@ class VimCharacterShortcuts {
       CharacterShortcutEvent(
         key: 'vim enter insert mode',
         character: 'i',
-        handler: (editorState) => _handleEnterInsert(mode),
+        handler: (editorState) => _handleEnterInsert(mode, editorState),
       ),
       CharacterShortcutEvent(
         key: 'vim delete line (dd)',
@@ -434,9 +434,30 @@ class VimCharacterShortcuts {
   /// 'i' enters insert mode from normal mode and swallows the keystroke
   /// (no literal "i" typed). If already in insert mode, 'i' is just a
   /// letter — let it through.
-  static Future<bool> _handleEnterInsert(VimModeController mode) async {
+  ///
+  /// After flipping the mode we RE-ASSERT the collapsed caret. Entering insert
+  /// via a swallowed 'i' does no text transaction, so AppFlowy never re-engages
+  /// its cursor overlay / text input for the new mode — the first char typed
+  /// then races the mode-change rebuild and the caret vanishes. Doing a real
+  /// edit (the '/' menu) is what otherwise "fixes" it; re-asserting the
+  /// selection reproduces that nudge without inserting anything. Deferred to a
+  /// post-frame callback so it lands AFTER this key event's own rebuild rather
+  /// than inside it (the collision the driver's caching comment describes).
+  static Future<bool> _handleEnterInsert(
+    VimModeController mode,
+    EditorState editorState,
+  ) async {
     if (!mode.isNormal) return false;
     mode.enterInsertMode();
+    final sel = editorState.selection;
+    if (sel != null && sel.isCollapsed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        editorState.updateSelectionWithReason(
+          Selection.collapsed(sel.start),
+          reason: SelectionUpdateReason.uiEvent,
+        );
+      });
+    }
     return true;
   }
 

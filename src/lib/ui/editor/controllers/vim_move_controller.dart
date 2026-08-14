@@ -1,6 +1,10 @@
 import 'package:flutter/foundation.dart';
 
-enum VimMode { normal, insert }
+/// [analysis] is a read-only review mode (SCAFFOLD): like normal mode it eats
+/// text input, but instead of editing it drives chunk-by-chunk review of the
+/// note's analysis (see AnalysisModeController). Enter it from normal mode;
+/// Escape returns to normal.
+enum VimMode { normal, insert, analysis }
 
 /// Tracks whether the editor is in vim-style normal (navigation) mode or
 /// insert (typing) mode. Every hjkl-style handler checks this before
@@ -40,6 +44,11 @@ class VimModeController extends ValueNotifier<VimMode> {
   bool get isNormal => _isEnabled && value == VimMode.normal;
   bool get isInsert => !_isEnabled || value == VimMode.insert;
 
+  /// Read-only analysis-review mode (SCAFFOLD). Neither [isNormal] nor
+  /// [isInsert] is true here, so editing shortcuts AND text input both stay
+  /// suppressed while reviewing chunks.
+  bool get isAnalysis => _isEnabled && value == VimMode.analysis;
+
   void enterNormalMode() {
     if (!_isEnabled) return;
     value = VimMode.normal;
@@ -47,6 +56,12 @@ class VimModeController extends ValueNotifier<VimMode> {
 
   void enterInsertMode() {
     value = VimMode.insert;
+  }
+
+  /// Enter analysis-review mode (only meaningful while Vim is enabled).
+  void enterAnalysisMode() {
+    if (!_isEnabled) return;
+    value = VimMode.analysis;
   }
 
   /// Call this every time [key] is pressed in normal mode. Returns true

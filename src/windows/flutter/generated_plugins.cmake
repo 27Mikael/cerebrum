@@ -5,6 +5,7 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   flutter_secure_storage_windows
   irondash_engine_context
+  sqlite3_flutter_libs
   super_native_extensions
   syncfusion_pdfviewer_windows
   url_launcher_windows
