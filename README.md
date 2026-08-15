@@ -10,6 +10,12 @@
 
 **Video Demo:** https://youtu.be/d2a07zjdi3Y
 
+> [!IMPORTANT]
+> This client and the [daemon](https://github.com/haephestus/Cerebrum-Daemon)
+> share wire contracts (note sync, engram submit/grading, identity). Before
+> changing any sync/submit shape, read [`docs/cross-repo-contracts.md`](docs/cross-repo-contracts.md)
+> and `grep -rn "CROSS-REPO CONTRACT" src/lib`.
+
 ---
 
 ## 1. What Is Cerebrum?

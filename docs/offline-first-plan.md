@@ -1,6 +1,8 @@
 # TODO: Offline-first client persistence
 
-**Status: NOT STARTED (plan for review).** Decided 2026-08-09.
+**Status: DONE (phases 1-4).** Planned 2026-08-09, implemented 2026-08-10 — see
+`changelog/2026-08-10.md`. Remaining items are daemon-side or explicitly v2
+(cross-device image serving, client-owned page ids, stronger conflict handling).
 
 ## Why this exists
 The app is meant to be **offline-first**, but today the client persists notes
@@ -30,23 +32,24 @@ Daemon-only sidecars (history/analysis) are NOT mirrored — they refetch when o
 
 ## Work items (phased, each shippable)
 
-### Phase 1 — writes never lost offline  *(the core)*
-- [ ] Add `path_provider` dep.
-- [ ] New `lib/services/note_store.dart` — the only filesystem toucher: `listNotes / readNote / writeNote / deleteNote / readImage / writeImage` + sync-state getters/setters.
-- [ ] `EditorScaffold._save` → write to `NoteStore` first (always succeeds), mark dirty + bump our version-vector slot, enqueue sync, then best-effort push.
-- [ ] Rewire `SyncService` outbox to the **whole-page-set `/update`** contract (`BubbleNotesApi.updateNote`) instead of the retired `pushNote`; adopt the merged server response on success, clear dirty.
-- [ ] `main.dart` — `drainOutbox()` on app start AND resume (+ on reconnect).
+### Phase 1 — writes never lost offline  *(the core)*  ✅
+- [x] Add `path_provider` dep.
+- [x] New `lib/services/note_store.dart` — the only filesystem toucher: `listNotes / readNote / writeNote / markDeleted+purge / readImage / writeImage` + sync-state getters/setters.
+- [x] `EditorScaffold._save` → write to `NoteStore` first (always succeeds), mark dirty, enqueue sync, then best-effort push. *(Version vectors dropped — the `/update` diff is per-page LWW, no vv in the body.)*
+- [x] Rewire `SyncService` outbox to the **whole-page-set `/update`** contract (`BubbleNotesApi.updateNote`) instead of the retired `pushNote`; adopt the merged server response on success, clear dirty.
+- [x] `main.dart` — `drainOutbox()` on app start AND resume. Reconnect handled by SyncService's auto-drain poll (no connectivity dep).
 
-### Phase 2 — local-first reads
-- [ ] `d_study_bubble_page.loadNotes` → read `_index.json` first, then background-refresh from daemon when reachable.
-- [ ] `_openNote` → `NoteStore.readNote` first; background `fetchNoteByFileName` refresh if online and not locally-dirty.
+### Phase 2 — local-first reads  ✅
+- [x] `d_study_bubble_page.loadNotes` → read local `_index.json` first, then background-refresh from daemon when reachable (keeps local-only/unsynced notes).
+- [x] `_openNote` → `NoteStore.readNote` first; background `fetchNoteByFileName` refresh if online and not locally-dirty.
 
-### Phase 3 — images offline + URL-fragility fix
-- [ ] On insert: `NoteStore.writeImage` locally + embed a **stable ref** (`cerebrum-image://<note_id>/<name>`), not an absolute daemon URL; queue the upload.
-- [ ] Image resolver: ref → local file (`Image.file`) if cached, else daemon URL. (Also fixes "absolute URL breaks when baseUrl changes".)
+### Phase 3 — images offline + URL-fragility fix  ✅
+- [x] On insert: `NoteStore.writeImage` locally + embed a **stable ref** (`cerebrum-image://<note_id>/<name>`), not an absolute daemon URL; queue the upload.
+- [x] Image resolver (`note_image_resolver.dart`): ref → local file if cached, else recorded daemon URL. (Also fixes "absolute URL breaks when baseUrl changes".) Transform happens at load/save boundaries (AppFlowy's image component left untouched).
 
-### Phase 4 — client-owned identity / offline create
-- [ ] Mint `note_id` (ULID) **client-side** so notes exist locally before the daemon sees them; `createNote` becomes "first push of a local note". (Also tidies the churny `p0/p9` id story — client owns identity.)
+### Phase 4 — client-owned identity / offline create  ✅
+- [x] Mint `note_id` (ULID, `lib/services/id.dart`) **client-side** so notes exist locally before the daemon sees them; `createNote` is now "first push of a local note". `addNote` works fully offline.
+- Note: page ids kept as `p{n}` — client-owned page ids would need a coordinated daemon change (per-page analysis keys on them).
 
 ## Reachability & triggers
 - Gate background sync on a connectivity/"last request succeeded" check. Trigger `drainOutbox` on: app start, resume, reconnect, and after each local save (best-effort).
